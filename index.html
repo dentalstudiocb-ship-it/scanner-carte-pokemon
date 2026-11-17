@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>Scanner Carte Pokémon</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Scanner Carte">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+:root{
+  --bg:#0f1115; --panel:#181b22; --panel2:#20242d; --line:#2c313c;
+  --text:#eef0f4; --muted:#9aa3b2; --accent:#ffcb05; --accent2:#3d7dca;
+  --good:#3ecf8e; --bad:#ff6b6b; --radius:14px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{padding-bottom:calc(72px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:5;background:rgba(15,17,21,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top));display:flex;align-items:center;gap:10px}
+header h1{font-size:18px;margin:0;letter-spacing:.3px}
+header .logo{width:26px;height:26px;border-radius:50%;background:linear-gradient(#e3350d 0 46%,#222 46% 54%,#fff 54%);border:2px solid #222;position:relative}
+header .logo:after{content:"";position:absolute;inset:7px;border-radius:50%;background:#fff;border:2px solid #222}
+header .sub{margin-left:auto;color:var(--muted);font-size:12px}
+main{max-width:860px;margin:0 auto;padding:16px}
+.view{display:none}.view.active{display:block}
+nav.tabs{position:fixed;bottom:0;left:0;right:0;z-index:10;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav.tabs button{flex:1;background:none;border:0;color:var(--muted);padding:10px 0 12px;font:inherit;font-size:12px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer}
+nav.tabs button svg{width:22px;height:22px}
+nav.tabs button.on{color:var(--accent)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:14px}
+h2{font-size:16px;margin:0 0 10px}
+h3{font-size:14px;margin:14px 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.btn{appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:10px 14px;border-radius:10px;font:inherit;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:42px}
+.btn.primary{background:var(--accent);color:#1a1a1a;border-color:var(--accent)}
+.btn.blue{background:var(--accent2);border-color:var(--accent2)}
+.btn.danger{color:var(--bad)}
+.btn.small{padding:6px 10px;min-height:34px;font-size:13px}
+.btn:disabled{opacity:.5}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row>.grow{flex:1;min-width:0}
+input,select{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px 12px;font:inherit;font-size:16px;min-height:42px}
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px}
+.muted{color:var(--muted)}.small{font-size:12px}
+.good{color:var(--good)}.bad{color:var(--bad)}
+/* camera */
+.cam{position:relative;background:#000;border-radius:var(--radius);overflow:hidden;aspect-ratio:3/4;max-height:62vh;margin:0 auto 12px;width:100%}
+.cam video,.cam img{width:100%;height:100%;object-fit:cover;display:block}
+.cam .frame{position:absolute;top:12.3%;bottom:12.3%;left:14%;right:14%;border:3px solid rgba(255,203,5,.85);border-radius:12px;pointer-events:none;box-shadow:0 0 0 2000px rgba(0,0,0,.35);transition:border-color .2s}
+.cam .frame.hit{border-color:var(--good)}
+.cam .scanline{position:absolute;left:14%;right:14%;height:2px;background:var(--accent);box-shadow:0 0 12px var(--accent);top:12.3%;animation:scan 2.2s ease-in-out infinite alternate;pointer-events:none}
+@keyframes scan{to{top:87.7%}}
+.cam .hint{position:absolute;left:0;right:0;top:10px;text-align:center;font-size:13px;color:#fff;text-shadow:0 1px 3px #000;font-weight:600}
+.cam .live{position:absolute;left:10px;right:10px;bottom:10px;background:rgba(24,27,34,.95);border:1px solid var(--line);border-radius:12px;padding:8px;display:none;gap:10px;align-items:center;cursor:pointer}
+.cam .live img{width:44px;height:61px;object-fit:cover;border-radius:4px}
+.cam .live .p{margin-left:auto;font-weight:800;color:var(--accent);font-size:18px}
+.cam .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--muted);text-align:center;padding:20px}
+.progress{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;margin:10px 0}
+.progress>div{height:100%;background:var(--accent);width:0;transition:width .2s}
+/* results */
+.list{display:flex;flex-direction:column;gap:8px}
+.item{display:flex;gap:12px;align-items:center;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:8px;cursor:pointer}
+.item img{width:52px;height:72px;object-fit:cover;border-radius:5px;background:#000;flex:none}
+.item .t{font-weight:600}
+.item .p{margin-left:auto;font-weight:700;color:var(--accent);white-space:nowrap}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.tile{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:6px;cursor:pointer;position:relative}
+.tile img{width:100%;aspect-ratio:63/88;object-fit:cover;border-radius:7px;background:#000;display:block}
+.tile .n{font-size:12px;font-weight:600;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .v{font-size:13px;color:var(--accent);font-weight:700}
+.tile .q{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.75);border-radius:8px;padding:1px 7px;font-size:12px;font-weight:700}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px}
+.stat .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.stat .v{font-size:20px;font-weight:800;margin-top:2px}
+.stat.big{grid-column:1/-1}
+.stat.big .v{font-size:28px;color:var(--accent)}
+@media(min-width:620px){.stats{grid-template-columns:repeat(4,1fr)}}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--muted);font-weight:600;font-size:12px}
+td.r,th.r{text-align:right}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;background:var(--panel2);border:1px solid var(--line)}
+.seg{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+.seg button{flex:1;border:0;background:none;color:var(--muted);padding:8px;border-radius:7px;font:inherit;font-weight:600;cursor:pointer}
+.seg button.on{background:var(--panel2);color:var(--text)}
+/* sheet */
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:20;display:none}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:21;background:var(--panel);border-radius:18px 18px 0 0;max-height:92vh;overflow:auto;padding:16px;padding-bottom:calc(20px + env(safe-area-inset-bottom));transform:translateY(100%);transition:transform .25s ease;max-width:860px;margin:0 auto}
+.sheet.open{transform:none}
+.sheet-bg.open{display:block}
+.sheet .close{position:sticky;top:0;float:right;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:50%;width:34px;height:34px;font-size:18px;cursor:pointer}
+.detail{display:flex;gap:14px;flex-wrap:wrap}
+.detail img.big{width:180px;max-width:42%;border-radius:10px;align-self:flex-start;background:#000}
+.detail .info{flex:1;min-width:200px}
+.price-main{font-size:32px;font-weight:800;color:var(--accent);line-height:1.1}
+.toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#fff;color:#111;padding:10px 16px;border-radius:10px;font-weight:600;z-index:30;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw;text-align:center}
+.toast.show{opacity:1}
+.spin{width:18px;height:18px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp 0.8s linear infinite;display:inline-block;vertical-align:middle}
+@keyframes sp{to{transform:rotate(360deg)}}
+.albums .item{cursor:pointer}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer;white-space:nowrap}
+.chip.on{border-color:var(--accent);color:var(--accent)}
+.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px}
+.note{font-size:12px;color:var(--muted);background:var(--panel2);border-radius:10px;padding:8px 10px;margin-top:10px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"></div><h1>Scanner Carte</h1>
+  <span class="sub" id="hdrTotal"></span>
+</header>
+
+<main>
+<!-- ============ SCAN ============ -->
+<section class="view active" id="v-scan">
+  <div class="cam" id="cam">
+    <video id="video" playsinline muted autoplay style="display:none"></video>
+    <img id="shot" alt="" style="display:none">
+    <div class="frame" id="frame" style="display:none"></div>
+    <div class="scanline" id="scanline" style="display:none"></div>
+    <div class="hint" id="camHint" style="display:none">Inquadra la carta dentro la cornice</div>
+    <div class="live" id="liveRes"></div>
+    <div class="empty" id="camEmpty">
+      <div style="font-size:42px">📷</div>
+      <div>Scatta una foto alla carta oppure caricala dalla galleria.<br><span class="small">Assicurati che nome e numero (es. 025/165) siano leggibili.</span></div>
+    </div>
+  </div>
+  <div class="row">
+    <button class="btn primary grow" id="btnCam">Avvia scanner</button>
+    <button class="btn grow" id="btnSnap" style="display:none">■ Ferma scanner</button>
+    <label class="btn grow" style="margin:0">Carica foto<input type="file" id="file" accept="image/*" hidden></label>
+    <input type="file" id="fileCam" accept="image/*" capture="environment" hidden>
+  </div>
+  <div id="ocrBox" style="display:none">
+    <div class="progress"><div id="ocrBar"></div></div>
+    <div class="small muted" id="ocrStatus"></div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>Cerca a mano</h2>
+    <div class="row">
+      <input class="grow" id="qName" placeholder="Nome (es. Charizard, Pikachu…)" style="flex:2">
+      <input class="grow" id="qNum" placeholder="N° (es. 25/165)" style="flex:1">
+    </div>
+    <div class="row" style="margin-top:8px"><button class="btn blue grow" id="btnSearch">Cerca</button></div>
+  </div>
+
+  <div id="results"></div>
+</section>
+
+<!-- ============ ALBUMS ============ -->
+<section class="view" id="v-albums">
+  <div class="stats" id="globalStats"></div>
+  <div class="row" style="margin:14px 0 10px">
+    <h2 class="grow" style="margin:0">I tuoi album</h2>
+    <button class="btn small" id="btnRefreshAll">↻ Aggiorna prezzi</button>
+    <button class="btn small primary" id="btnNewAlbum">+ Nuovo</button>
+  </div>
+  <div class="list albums" id="albumList"></div>
+</section>
+
+<!-- ============ ALBUM DETAIL ============ -->
+<section class="view" id="v-album">
+  <div class="row" style="margin-bottom:12px">
+    <button class="btn small" id="btnBack">← Album</button>
+    <h2 class="grow" id="albumTitle" style="margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></h2>
+    <button class="btn small" id="btnAlbumMenu">⋯</button>
+  </div>
+  <div class="stats" id="albumStats"></div>
+  <div class="row" style="margin:14px 0 8px">
+    <select id="sortSel" class="grow">
+      <option value="value">Ordina: valore ↓</option>
+      <option value="name">Ordina: nome</option>
+      <option value="added">Ordina: aggiunte di recente</option>
+      <option value="set">Ordina: espansione</option>
+    </select>
+  </div>
+  <div class="grid" id="albumGrid"></div>
+</section>
+
+<!-- ============ SETTINGS ============ -->
+<section class="view" id="v-settings">
+  <div class="card">
+    <h2>Prezzi</h2>
+    <label>Valore di riferimento Cardmarket</label>
+    <select id="setPriceField">
+      <option value="trend">Prezzo di tendenza (trend)</option>
+      <option value="avg30">Media 30 giorni</option>
+      <option value="avg7">Media 7 giorni</option>
+      <option value="avg">Prezzo medio di vendita</option>
+      <option value="low">Prezzo più basso (da)</option>
+    </select>
+    <label>Costo gradazione per carta (€, spedizione inclusa)</label>
+    <input type="number" id="setGradeCost" min="0" step="1">
+  </div>
+  <div class="card">
+    <h2>Stima valori gradati</h2>
+    <p class="small muted" style="margin-top:0">Cardmarket non pubblica i prezzi delle carte gradate tramite API: l'app li stima moltiplicando il prezzo raw (non gradato) per questi coefficienti. Puoi tararli in base alle vendite reali che vedi.</p>
+    <table id="multTable"></table>
+    <div class="row" style="margin-top:10px"><button class="btn small" id="btnResetMult">Ripristina valori predefiniti</button></div>
+  </div>
+  <div class="card">
+    <h2>Backup</h2>
+    <p class="small muted" style="margin-top:0">La collezione è salvata solo su questo dispositivo. Esporta un backup ogni tanto.</p>
+    <div class="row">
+      <button class="btn grow" id="btnExport">Esporta JSON</button>
+      <label class="btn grow" style="margin:0">Importa JSON<input type="file" id="importFile" accept="application/json" hidden></label>
+      <button class="btn grow" id="btnCsv">Esporta CSV</button>
+    </div>
+  </div>
+  <p class="small muted">Dati carte e prezzi Cardmarket: TCGdex (api.tcgdex.net), aggiornati quotidianamente. Riconoscimento testo: Tesseract.js. CardVault non è affiliata con Cardmarket, The Pokémon Company o PSA.</p>
+</section>
+</main>
+
+<nav class="tabs">
+  <button data-tab="scan" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="8" y="6" width="8" height="12" rx="1"/></svg>Scansiona</button>
+  <button data-tab="albums"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M3 12h18"/></svg>Album</button>
+  <button data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Impostazioni</button>
+</nav>
+
+<div class="sheet-bg" id="sheetBg"></div>
+<div class="sheet" id="sheet"><button class="close" id="sheetClose">×</button><div id="sheetBody"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+"use strict";
+/* ====================== CONFIG & STATE ====================== */
+const API = "https://api.tcgdex.net/v2";
+const GRADES = ["10","9","8","7","6"];
+const DEFAULT_MULT = {
+  modern:  {"10":3.5,"9":1.6,"8":1.15,"7":0.95,"6":0.8},
+  vintage: {"10":10, "9":3.2,"8":1.8, "7":1.3, "6":1.0}
+};
+const CONDITIONS = [
+  ["NM","Near Mint",1],["EX","Excellent",0.85],["GD","Good",0.65],
+  ["LP","Light Played",0.5],["PL","Played",0.35],["PO","Poor",0.2]
+];
+const VINTAGE_SERIES = /^(base|gym|neo|lc|si|ecard|bp|np)/i;
+
+const LS_KEY = "cardvault.v1";
+let state = load();
+function load(){
+  let s=null;
+  try{ s = JSON.parse(localStorage.getItem(LS_KEY)); }catch(e){}
+  if(!s) s = {};
+  s.albums = s.albums || [{id:uid(),name:"La mia collezione",created:Date.now(),cards:[]}];
+  s.settings = Object.assign({priceField:"trend",gradeCost:25,mult:JSON.parse(JSON.stringify(DEFAULT_MULT))}, s.settings||{});
+  return s;
+}
+function save(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){ toast("Impossibile salvare: memoria piena?"); } renderHeader(); }
+function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4); }
+
+/* ====================== UTILS ====================== */
+const $ = s => document.querySelector(s);
+const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const eur = v => (v==null||isNaN(v)) ? "—" : new Intl.NumberFormat("it-IT",{style:"currency",currency:"EUR"}).format(v);
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove("show"),2200); }
+function img(card, q="low"){ return card.image ? `${card.image}/${q}.webp` : "data:image/svg+xml;utf8,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 63 88"><rect width="63" height="88" fill="#222"/><text x="31" y="48" font-size="10" fill="#666" text-anchor="middle">?</text></svg>'); }
+
+/* ====================== API (TCGdex) ====================== */
+const mem = {};
+async function getJSON(url){
+  if(mem[url]) return mem[url];
+  const p = fetch(url).then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); });
+  mem[url]=p; p.catch(()=>delete mem[url]);
+  return p;
+}
+async function getSets(){
+  const k="cardvault.sets", cached = JSON.parse(localStorage.getItem(k)||"null");
+  if(cached && Date.now()-cached.t < 864e5) return cached.d;
+  const d = await getJSON(`${API}/en/sets`);
+  try{ localStorage.setItem(k, JSON.stringify({t:Date.now(),d})); }catch(e){}
+  return d;
+}
+const getSet  = id => getJSON(`${API}/en/sets/${encodeURIComponent(id)}`);
+const getCard = id => getJSON(`${API}/en/cards/${encodeURIComponent(id)}`);
+async function searchByName(name, lang="en"){
+  return getJSON(`${API}/${lang}/cards?name=${encodeURIComponent(name)}&pagination:itemsPerPage=40`);
+}
+
+/* ====================== PRICING ====================== */
+function cmPrices(card){ return (card && card.pricing && card.pricing.cardmarket) || null; }
+function pickPrice(cm, variant, field){
+  if(!cm) return null;
+  const order = [field,"trend","avg30","avg7","avg","low"];
+  if(variant==="holo"){
+    for(const f of order){ const v=cm[f+"-holo"]; if(v>0) return v; }
+  }
+  for(const f of order){ const v=cm[f]; if(v>0) return v; }
+  return null;
+}
+function hasHoloPrice(cm){ return cm && ["trend-holo","avg30-holo","avg-holo","low-holo"].some(k=>cm[k]>0); }
+function isVintage(setId){ return VINTAGE_SERIES.test(setId||""); }
+function gradedEstimates(raw, setId){
+  if(!raw) return null;
+  const m = state.settings.mult[isVintage(setId)?"vintage":"modern"];
+  const out={}; GRADES.forEach(g=>out[g]=raw*m[g]); return out;
+}
+function condFactor(c){ return (CONDITIONS.find(x=>x[0]===c)||CONDITIONS[0])[2]; }
+function entryValue(e){
+  const raw = pickPrice(e.cm, e.variant, state.settings.priceField);
+  if(raw==null) return 0;
+  if(e.graded) return (gradedEstimates(raw, e.setId)||{})[e.graded]*e.qty || 0;
+  return raw*condFactor(e.condition)*e.qty;
+}
+
+/* ====================== OCR / SCANNER ====================== */
+let stream=null, worker=null, numWorker=null;
+async function getWorker(){
+  if(worker) return worker;
+  worker = await Tesseract.createWorker("eng", 1, {
+    logger: m => { if(scanning) return; if(m.status==="recognizing text") setOcr(m.progress*100, "Lettura testo…"); else if(m.status) setOcr(null, "Preparazione OCR: "+m.status+"…"); }
+  });
+  return worker;
+}
+async function getNumWorker(){
+  if(numWorker) return numWorker;
+  const w = await Tesseract.createWorker("eng", 1);
+  await w.setParameters({tessedit_char_whitelist:"0123456789/ ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
+  numWorker = w; return w;
+}
+function setOcr(pct, msg){ $("#ocrBox").style.display="block"; if(pct!=null) $("#ocrBar").style.width=pct+"%"; if(msg) $("#ocrStatus").textContent=msg; }
+
+/* ---------- LIVE SCANNER: reads the card continuously, no photo needed ---------- */
+// Inside an embedded page (e.g. claude.ai) live camera is blocked: open the phone camera app instead.
+const liveCamOK = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && window.top===window &&
+  !(document.featurePolicy && !document.featurePolicy.allowsFeature("camera"));
+let scanning=false, busy=false, lastHitId=null, prevTopId=null;
+const hint = t => { $("#camHint").textContent=t; };
+
+$("#btnCam").onclick = async ()=>{
+  if(!liveCamOK){ $("#fileCam").click(); return; }
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1920},height:{ideal:1080}},audio:false});
+  }catch(e){ toast("Permesso fotocamera negato: usa 'Carica foto'"); return; }
+  const v=$("#video"); v.srcObject=stream; v.style.display="block";
+  try{ const tr=stream.getVideoTracks()[0], caps=tr.getCapabilities?tr.getCapabilities():{};
+       if(caps.focusMode && caps.focusMode.includes("continuous")) tr.applyConstraints({advanced:[{focusMode:"continuous"}]}); }catch(e){}
+  $("#shot").style.display="none"; $("#camEmpty").style.display="none";
+  ["#frame","#camHint","#scanline"].forEach(s=>$(s).style.display="block");
+  $("#frame").classList.remove("hit"); $("#liveRes").style.display="none";
+  $("#btnCam").style.display="none"; $("#btnSnap").style.display="";
+  $("#results").innerHTML=""; lastHitId=null; prevTopId=null;
+  scanning=true;
+  hint("Preparazione scanner… (solo la prima volta può volerci qualche secondo)");
+  try{ await Promise.all([getWorker(), getNumWorker()]); }
+  catch(e){ hint("Errore nel caricare lo scanner. Controlla la connessione."); return; }
+  hint("Inquadra la carta dentro la cornice");
+  scanTick();
+};
+$("#btnSnap").onclick = ()=>stopCam();
+
+function grabCard(){
+  const v=$("#video"), box=v.getBoundingClientRect(), fr=$("#frame").getBoundingClientRect();
+  const vw=v.videoWidth, vh=v.videoHeight, scale=Math.max(box.width/vw, box.height/vh);
+  const offX=(vw*scale-box.width)/2, offY=(vh*scale-box.height)/2;
+  const sx=(fr.left-box.left+offX)/scale, sy=(fr.top-box.top+offY)/scale, sw=fr.width/scale, sh=fr.height/scale;
+  const c=document.createElement("canvas"); const outW=Math.min(900, Math.round(sw));
+  c.width=outW; c.height=Math.round(outW*sh/sw);
+  const ctx=c.getContext("2d"); ctx.imageSmoothingQuality="high";
+  ctx.drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);
+  return c;
+}
+
+async function scanTick(){
+  if(!scanning) return;
+  const v=$("#video");
+  if(busy || !v.videoWidth || $("#sheet").classList.contains("open") || document.hidden){ setTimeout(scanTick,400); return; }
+  busy=true;
+  try{
+    const card=grabCard(), W=card.width, H=card.height;
+    const [num, top] = await Promise.all([
+      numWorker.recognize(prep(card,0,Math.round(H*0.85),W,Math.round(H*0.15),2)),
+      worker.recognize(prep(card,0,0,W,Math.round(H*0.14),1.5))
+    ]);
+    if(!scanning) return;
+    const numText=num.data.text, nameText=top.data.text;
+    if(!parseNumbers(numText+"\n"+nameText).length){
+      if(!lastHitId) hint("Avvicina la carta: devo leggere il numero in basso (es. 025/165)");
+    }else{
+      const cands = await identify(numText+"\n"+nameText, nameText, true);
+      if(cands.length){
+        const t=cands[0], sure = cands.length===1 || (t._s>0 && t._s>(cands[1]._s??0));
+        if((sure || prevTopId===t.id) && t.id!==lastHitId) liveHit(t, cands);
+        prevTopId=t.id;
+      }
+    }
+  }catch(e){ console.error(e); }
+  finally{ busy=false; if(scanning) setTimeout(scanTick,200); }
+}
+
+async function liveHit(c, cands){
+  lastHitId=c.id;
+  $("#frame").classList.add("hit"); setTimeout(()=>$("#frame").classList.remove("hit"),900);
+  if(navigator.vibrate) navigator.vibrate(60);
+  hint("Carta trovata! Tocca per i dettagli — oppure inquadra la prossima");
+  const box=$("#liveRes");
+  box.innerHTML=`<img src="${img(c)}" alt=""><div style="min-width:0"><div style="font-weight:700">${esc(c.name)}</div><div class="small muted">${esc(c.setName||"")} · #${esc(c.localId)}</div></div><div class="p"><span class="spin"></span></div>`;
+  box.style.display="flex";
+  box.onclick=()=>openCard(c.id);
+  // other cards with the same number, in case the guess is wrong
+  $("#results").innerHTML = cands.length>1 ? `<div class="card"><h2>Non è questa?</h2><div class="list">${cands.slice(1,8).map(o=>`<div class="item" data-id="${esc(o.id)}"><img src="${img(o)}" alt=""><div><div class="t">${esc(o.name)}</div><div class="small muted">${esc(o.setName||"")} · #${esc(o.localId)}</div></div></div>`).join("")}</div></div>` : "";
+  document.querySelectorAll("#results .item").forEach(el=>el.onclick=()=>openCard(el.dataset.id));
+  try{
+    const d=await getCard(c.id);
+    if(lastHitId===c.id) box.querySelector(".p").textContent=eur(pickPrice(cmPrices(d),"normal",state.settings.priceField));
+  }catch(e){ box.querySelector(".p").textContent="—"; }
+}
+
+function stopCam(){
+  scanning=false;
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  ["#video","#frame","#camHint","#scanline","#liveRes"].forEach(s=>$(s).style.display="none");
+  if($("#shot").style.display!=="block") $("#camEmpty").style.display="";
+  $("#btnCam").style.display=""; $("#btnSnap").style.display="none";
+}
+function showShot(src){ const i=$("#shot"); i.src=src; i.style.display="block"; i.style.objectFit="contain"; $("#camEmpty").style.display="none"; }
+$("#file").onchange = $("#fileCam").onchange = e=>{
+  const f=e.target.files[0]; if(!f) return; e.target.value="";
+  stopCam();
+  const im=new Image();
+  im.onload=()=>{
+    const max=1600, s=Math.min(1, max/Math.max(im.width,im.height));
+    const c=document.createElement("canvas"); c.width=im.width*s; c.height=im.height*s;
+    c.getContext("2d").drawImage(im,0,0,c.width,c.height);
+    showShot(c.toDataURL("image/jpeg",0.92)); recognize(c);
+    URL.revokeObjectURL(im.src);
+  };
+  im.src=URL.createObjectURL(f);
+};
+
+function prep(src, x, y, w, h, upscale){
+  const c=document.createElement("canvas");
+  c.width=Math.round(w*upscale); c.height=Math.round(h*upscale);
+  const ctx=c.getContext("2d"); ctx.imageSmoothingQuality="high";
+  ctx.drawImage(src,x,y,w,h,0,0,c.width,c.height);
+  const d=ctx.getImageData(0,0,c.width,c.height), p=d.data;
+  for(let i=0;i<p.length;i+=4){
+    let g=0.299*p[i]+0.587*p[i+1]+0.114*p[i+2];
+    g = (g-128)*1.5+128; g=g<0?0:g>255?255:g;
+    p[i]=p[i+1]=p[i+2]=g;
+  }
+  ctx.putImageData(d,0,0); return c;
+}
+
+async function recognize(canvas){
+  $("#results").innerHTML="";
+  setOcr(0,"Avvio riconoscimento…");
+  try{
+    const w = await getWorker();
+    const W=canvas.width, H=canvas.height;
+    // pass 1: full card text
+    await w.setParameters({tessedit_char_whitelist:""});
+    const full = await w.recognize(prep(canvas,0,0,W,H, W<1000?1.6:1));
+    // pass 2: bottom strip, where the collector number is (e.g. 025/165)
+    setOcr(0,"Lettura numero carta…");
+    await w.setParameters({tessedit_char_whitelist:"0123456789/ ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
+    const strip = await w.recognize(prep(canvas,0,Math.round(H*0.82),W,Math.round(H*0.18), 2.5));
+    await w.setParameters({tessedit_char_whitelist:""});
+    const text = full.data.text + "\n" + strip.data.text;
+    setOcr(100,"Ricerca carta nel database…");
+    const cands = await identify(text, full.data.text);
+    showResults(cands, text);
+  }catch(err){
+    console.error(err);
+    setOcr(0,"Errore durante il riconoscimento. Riprova o usa la ricerca manuale.");
+  }
+}
+
+function parseNumbers(text){
+  const out=[];
+  const t = text.replace(/[Oo](?=\d)|(?<=\d)[Oo]/g,"0").replace(/[|Il](?=\d{2})/g,"1");
+  const re = /\b([A-Z]{0,3})(\d{1,3}) ?\/ ?([A-Z]{0,3})(\d{2,3})\b/g;
+  let m; while((m=re.exec(t))){
+    const n=parseInt(m[2],10), tot=parseInt(m[4],10);
+    if(n>0 && tot>=10 && n<=tot+150){
+      out.push({prefix:m[1]||"", n, tot, raw:m[0]});
+      if(m[1]) out.push({prefix:"", n, tot, raw:m[0]}); // OCR noise before the number
+    }
+  }
+  return out;
+}
+const STOP = new Set(["BASIC","STAGE","EVOLVES","FROM","POKEMON","POKÉMON","TRAINER","ENERGY","WEAKNESS","RESISTANCE","RETREAT","ILLUS","ITEM","SUPPORTER","BASE","FASE","EVOLVE","DEBOLEZZA","RESISTENZA","RITIRATA","NINTENDO","CREATURES","GAME","FREAK","LENGTH","WEIGHT","ABILITY","ABILITÀ","RULE","STRUMENTO","ALLENATORE","ENERGIA"]);
+function nameGuesses(text){
+  const lines = text.split(/\n/).map(l=>l.trim()).filter(Boolean).slice(0,6);
+  const words=[];
+  lines.forEach(l=>l.split(/[^A-Za-zÀ-ÿ'\-]+/).forEach(w=>{
+    if(w.length>=4 && !STOP.has(w.toUpperCase()) && /[a-z]/.test(w)) words.push(w);
+  }));
+  return [...new Set(words)].slice(0,5);
+}
+function norm(s){ return (s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9]/g,""); }
+function nameScore(cardName, text){
+  const t = norm(text); let score=0;
+  cardName.split(/\s+/).forEach(w=>{
+    const n=norm(w);
+    if(n.length>=3 && t.includes(n)) score+= n.length;
+    else if(n.length && n.length<3 && new RegExp("(^|[^a-z])"+n+"([^a-z]|$)","i").test(text)) score+=2; // ex, V, GX…
+    else if(n.length>=3) score-=1; // short suffixes (ex, V, GX) are stylized logos: often unreadable, no penalty
+  });
+  return score;
+}
+
+async function identify(text, fullText, numberOnly){
+  const nums = parseNumbers(text);
+  const sets = await getSets();
+  let found=[];
+  for(const num of nums.slice(0,3)){
+    // secret rares can exceed the official count; match sets on printed total
+    const matchSets = sets.filter(s=>s.cardCount && s.cardCount.official===num.tot);
+    const lists = await Promise.all(matchSets.slice(0,12).map(s=>getSet(s.id).catch(()=>null)));
+    lists.forEach(set=>{
+      if(!set||!set.cards) return;
+      set.cards.forEach(c=>{
+        const lid=c.localId.replace(/^[A-Z]+/i,""), lp=c.localId.match(/^[A-Z]+/i);
+        if(parseInt(lid,10)===num.n && (!num.prefix || (lp && lp[0].toUpperCase()===num.prefix)))
+          found.push({id:c.id,name:c.name,localId:c.localId,image:c.image,setName:set.name,setId:set.id,printed:set.cardCount.official});
+      });
+    });
+    if(found.length) break;
+  }
+  if(found.length){
+    const order={}; sets.forEach((s,i)=>order[s.id]=i);
+    found.forEach(c=>c._s=nameScore(c.name, fullText));
+    found.sort((a,b)=>b._s-a._s || (order[b.setId]||0)-(order[a.setId]||0)); // tie → newer set first
+    return found;
+  }
+  if(numberOnly) return [];
+  // fallback: search by words read on the card
+  for(const w of nameGuesses(fullText)){
+    for(const lang of ["en","it"]){
+      try{
+        const r = await searchByName(w, lang);
+        if(r && r.length) return r.map(c=>({id:c.id,name:c.name,localId:c.localId,image:c.image}));
+      }catch(e){}
+    }
+  }
+  return [];
+}
+
+/* ====================== RESULTS LIST ====================== */
+async function showResults(cands, ocrText){
+  const box=$("#results");
+  if(!cands.length){
+    box.innerHTML=`<div class="card"><h2>Carta non riconosciuta</h2><p class="muted small">Prova con più luce, senza riflessi, con la carta dritta e il numero in basso ben visibile — oppure usa la ricerca manuale qui sopra.</p>${ocrText?`<details><summary class="small muted">Testo letto</summary><pre class="small muted" style="white-space:pre-wrap">${esc(ocrText)}</pre></details>`:""}</div>`;
+    setOcr(0,""); $("#ocrBox").style.display="none";
+    return;
+  }
+  $("#ocrBox").style.display="none";
+  box.innerHTML=`<div class="card"><h2>${cands.length===1?"Carta trovata":"Risultati ("+cands.length+")"}</h2><div class="list" id="resList"></div></div>`;
+  const list=$("#resList");
+  cands.slice(0,40).forEach((c,i)=>{
+    const el=document.createElement("div"); el.className="item";
+    el.innerHTML=`<img loading="lazy" src="${img(c)}" alt=""><div style="min-width:0"><div class="t">${esc(c.name)}</div><div class="small muted">${esc(c.setName||c.id)} · #${esc(c.localId)}${c.printed?"/"+c.printed:""}</div></div><div class="p"><span class="spin"></span></div>`;
+    el.onclick=()=>openCard(c.id);
+    list.appendChild(el);
+    // lazy price for first results
+    if(i<15) getCard(c.id).then(d=>{
+      const v=pickPrice(cmPrices(d),"normal",state.settings.priceField);
+      el.querySelector(".p").textContent=eur(v);
+      if(!c.setName && d.set){ el.querySelector(".small").textContent=`${d.set.name} · #${d.localId}`; }
+    }).catch(()=>el.querySelector(".p").textContent="—");
+    else el.querySelector(".p").textContent="›";
+  });
+  if(cands.length===1 || (cands[0]._s>0 && cands[0]._s>(cands[1]._s??0))) openCard(cands[0].id);
+}
+
+$("#btnSearch").onclick = manualSearch;
+$("#qName").onkeydown = $("#qNum").onkeydown = e=>{ if(e.key==="Enter") manualSearch(); };
+async function manualSearch(){
+  const name=$("#qName").value.trim(), num=$("#qNum").value.trim();
+  if(!name && !num) return toast("Scrivi un nome o un numero");
+  $("#results").innerHTML=`<div class="card"><span class="spin"></span> Ricerca…</div>`;
+  try{
+    let cands=[];
+    if(num && /\//.test(num)){
+      cands = await identify(num.replace(/\s/g,""), name);
+      if(name) cands = cands.filter(c=>nameScore(c.name,name)>0 || cands.length<4);
+    }
+    if(!cands.length && name){
+      let r = await searchByName(name,"en");
+      if(!r.length) r = await searchByName(name,"it");
+      if(num){ const n=parseInt(num,10); r=r.filter(c=>parseInt(c.localId.replace(/^\D+/,""),10)===n); }
+      cands = r.map(c=>({id:c.id,name:c.name,localId:c.localId,image:c.image}));
+    }
+    showResults(cands,"");
+  }catch(e){ $("#results").innerHTML=`<div class="card bad">Errore di rete. Controlla la connessione.</div>`; }
+}
+
+/* ====================== CARD DETAIL SHEET ====================== */
+function openSheet(html){ $("#sheetBody").innerHTML=html; $("#sheet").classList.add("open"); $("#sheetBg").classList.add("open"); $("#sheet").scrollTop=0; }
+function closeSheet(){ $("#sheet").classList.remove("open"); $("#sheetBg").classList.remove("open"); }
+$("#sheetClose").onclick=closeSheet; $("#sheetBg").onclick=closeSheet;
+
+async function openCard(id, entry){
+  openSheet(`<div style="padding:30px;text-align:center"><span class="spin"></span></div>`);
+  let card;
+  try{ card = await getCard(id); }catch(e){ return openSheet(`<p class="bad">Impossibile caricare la carta.</p>`); }
+  const cm = cmPrices(card);
+  let variant = entry ? entry.variant : "normal";
+  const holoAvail = hasHoloPrice(cm);
+
+  const render = ()=>{
+    const f=state.settings.priceField;
+    const raw = pickPrice(cm, variant, f);
+    const g = gradedEstimates(raw, card.set.id);
+    const cost = state.settings.gradeCost;
+    const sfx = variant==="holo"?"-holo":"";
+    const pr = k => cm ? eur(cm[k+sfx]>0?cm[k+sfx]:(variant==="holo"?null:cm[k])) : "—";
+    const albumsOpts = state.albums.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");
+    openSheet(`
+      <div class="detail">
+        <img class="big" src="${img(card,"high")}" alt="">
+        <div class="info">
+          <div class="small muted">${esc(card.set.name)} · #${esc(card.localId)}/${card.set.cardCount?.official??"?"} ${card.rarity?"· "+esc(card.rarity):""}</div>
+          <h2 style="font-size:22px;margin:4px 0 10px">${esc(card.name)}</h2>
+          ${holoAvail?`<div class="seg" id="varSeg" style="margin-bottom:10px"><button data-v="normal" class="${variant==="normal"?"on":""}">Normale</button><button data-v="holo" class="${variant==="holo"?"on":""}">Reverse / Holo</button></div>`:""}
+          <div class="small muted">Valore Cardmarket (raw, NM)</div>
+          <div class="price-main">${eur(raw)}</div>
+          <table style="margin-top:8px">
+            <tr><td class="muted">Trend</td><td class="r">${pr("trend")}</td><td class="muted">Da</td><td class="r">${pr("low")}</td></tr>
+            <tr><td class="muted">Media 7g</td><td class="r">${pr("avg7")}</td><td class="muted">Media 30g</td><td class="r">${pr("avg30")}</td></tr>
+          </table>
+          ${cm?`<div class="small muted" style="margin-top:6px">Aggiornato ${new Date(cm.updated).toLocaleDateString("it-IT")}${cm.idProduct?` · <a style="color:var(--accent2)" target="_blank" rel="noopener" href="https://www.cardmarket.com/it/Pokemon/Products?idProduct=${cm.idProduct}">Apri su Cardmarket</a>`:""}</div>`:`<div class="small bad">Nessun prezzo Cardmarket disponibile.</div>`}
+        </div>
+      </div>
+
+      <h3>Se la fai gradare <span class="pill">stima</span></h3>
+      ${g?`<table>
+        <tr><th>Voto</th><th class="r">Valore stimato</th><th class="r">Guadagno netto*</th></tr>
+        ${GRADES.map(gr=>{ const net=g[gr]-raw-cost; return `<tr><td><b>PSA ${gr}</b>${gr==="10"?' <span class="small muted">Gem Mint</span>':gr==="9"?' <span class="small muted">Mint</span>':""}</td><td class="r"><b>${eur(g[gr])}</b></td><td class="r ${net>0?"good":"bad"}">${net>0?"+":""}${eur(net)}</td></tr>`; }).join("")}
+      </table>
+      <div class="note">* Valore gradato − valore raw − costo gradazione (${eur(cost)}). Stime basate su coefficienti ${isVintage(card.set.id)?"<b>vintage</b>":"<b>moderni</b>"} modificabili in Impostazioni. ${(g["10"]-raw-cost)<=0?"<b>Per questa carta la gradazione probabilmente non conviene.</b>":(g["9"]-raw-cost)>0?"<b class='good'>Candidata interessante per la gradazione</b> (se in condizioni ottime).":"Conviene solo se ottieni un 10."}</div>`
+      :`<p class="muted small">Serve un prezzo raw per stimare i valori gradati.</p>`}
+
+      <h3>${entry?"Modifica nell'album":"Aggiungi all'album"}</h3>
+      <div class="row">
+        <div class="grow"><label>Album</label><select id="addAlbum">${albumsOpts}<option value="__new">+ Nuovo album…</option></select></div>
+        <div style="width:90px"><label>Quantità</label><input type="number" id="addQty" min="1" value="${entry?entry.qty:1}"></div>
+      </div>
+      <div class="row">
+        <div class="grow"><label>Condizione / gradazione</label><select id="addCond">
+          ${CONDITIONS.map(c=>`<option value="${c[0]}">${c[0]} – ${c[1]}</option>`).join("")}
+          ${GRADES.map(gr=>`<option value="PSA${gr}">Gradata PSA ${gr}</option>`).join("")}
+        </select></div>
+        <div style="width:130px"><label>Prezzo pagato (€)</label><input type="number" id="addBuy" min="0" step="0.01" placeholder="opz." value="${entry&&entry.buyPrice!=null?entry.buyPrice:""}"></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary grow" id="btnAdd">${entry?"Salva modifiche":"Aggiungi all'album"}</button>
+        ${entry?`<button class="btn danger" id="btnDel">Rimuovi</button>`:""}
+      </div>
+    `);
+    if(entry){
+      $("#addAlbum").value = entry._album; $("#addAlbum").disabled=true;
+      $("#addCond").value = entry.graded ? "PSA"+entry.graded : entry.condition;
+    }
+    document.querySelectorAll("#varSeg button").forEach(b=>b.onclick=()=>{ variant=b.dataset.v; render(); });
+    $("#addAlbum").onchange=e=>{
+      if(e.target.value!=="__new") return;
+      const n=prompt("Nome del nuovo album:");
+      if(n){ const a={id:uid(),name:n.trim(),created:Date.now(),cards:[]}; state.albums.push(a); save(); render(); $("#addAlbum").value=a.id; }
+      else e.target.value=state.albums[0].id;
+    };
+    $("#btnAdd").onclick=()=>{
+      const cond=$("#addCond").value, qty=Math.max(1,parseInt($("#addQty").value)||1);
+      const bp=$("#addBuy").value===""?null:parseFloat($("#addBuy").value);
+      const graded = cond.startsWith("PSA") ? cond.slice(3) : null;
+      if(entry){
+        const a=state.albums.find(a=>a.id===entry._album), e=a.cards.find(x=>x.uid===entry.uid);
+        Object.assign(e,{qty,variant,condition:graded?"NM":cond,graded,buyPrice:bp,cm,updated:Date.now()});
+        save(); closeSheet(); renderAlbum(); toast("Salvato");
+        return;
+      }
+      const a=state.albums.find(a=>a.id===$("#addAlbum").value)||state.albums[0];
+      a.cards.push({uid:uid(),cardId:card.id,name:card.name,setId:card.set.id,setName:card.set.name,localId:card.localId,
+        printed:card.set.cardCount?.official,image:card.image,rarity:card.rarity||"",variant,condition:graded?"NM":cond,graded,qty,buyPrice:bp,cm,added:Date.now(),updated:Date.now()});
+      save(); closeSheet(); toast(`Aggiunta a "${a.name}"`);
+    };
+    if(entry) $("#btnDel").onclick=()=>{
+      if(!confirm("Rimuovere la carta dall'album?")) return;
+      const a=state.albums.find(a=>a.id===entry._album); a.cards=a.cards.filter(x=>x.uid!==entry.uid);
+      save(); closeSheet(); renderAlbum(); toast("Rimossa");
+    };
+  };
+  render();
+}
+
+/* ====================== ALBUMS ====================== */
+function albumTotals(cards){
+  let value=0,count=0,paid=0,paidKnown=0,g9=0,g10=0;
+  cards.forEach(e=>{
+    const v=entryValue(e); value+=v; count+=e.qty;
+    if(e.buyPrice!=null){ paid+=e.buyPrice*e.qty; paidKnown+=v; }
+    const raw=pickPrice(e.cm,e.variant,state.settings.priceField);
+    const g=e.graded? null : gradedEstimates(raw,e.setId);
+    g9 += g? g["9"]*e.qty : v; g10 += g? g["10"]*e.qty : v;
+  });
+  return {value,count,paid,paidKnown,g9,g10,unique:cards.length};
+}
+function statsHTML(t){
+  const gain=t.paidKnown-t.paid;
+  return `<div class="stat big"><div class="k">Valore del lotto (Cardmarket)</div><div class="v">${eur(t.value)}</div></div>
+    <div class="stat"><div class="k">Carte</div><div class="v">${t.count}</div></div>
+    <div class="stat"><div class="k">Se tutte PSA 9</div><div class="v">${eur(t.g9)}</div></div>
+    <div class="stat"><div class="k">Se tutte PSA 10</div><div class="v">${eur(t.g10)}</div></div>
+    <div class="stat"><div class="k">Guadagno vs pagato</div><div class="v ${t.paid?(gain>=0?"good":"bad"):""}">${t.paid?(gain>=0?"+":"")+eur(gain):"—"}</div></div>`;
+}
+function renderHeader(){
+  const all=state.albums.flatMap(a=>a.cards);
+  $("#hdrTotal").textContent = all.length ? "Collezione: "+eur(albumTotals(all).value) : "";
+}
+function renderAlbums(){
+  const all=state.albums.flatMap(a=>a.cards);
+  $("#globalStats").innerHTML=statsHTML(albumTotals(all));
+  $("#albumList").innerHTML="";
+  state.albums.forEach(a=>{
+    const t=albumTotals(a.cards);
+    const covers=[...a.cards].sort((x,y)=>entryValue(y)-entryValue(x)).slice(0,3);
+    const el=document.createElement("div"); el.className="item";
+    el.innerHTML=`<div style="display:flex;flex:none">${covers.length?covers.map((c,i)=>`<img src="${img(c)}" style="width:40px;height:56px;margin-left:${i?-18:0}px;border:2px solid var(--panel2)" alt="">`).join(""):`<div style="width:40px;height:56px;border-radius:5px;border:1px dashed var(--line)"></div>`}</div>
+      <div style="min-width:0"><div class="t">${esc(a.name)}</div><div class="small muted">${t.count} carte · ${t.unique} diverse</div></div><div class="p">${eur(t.value)}</div>`;
+    el.onclick=()=>{ currentAlbum=a.id; show("album"); };
+    $("#albumList").appendChild(el);
+  });
+}
+let currentAlbum=null;
+function renderAlbum(){
+  const a=state.albums.find(x=>x.id===currentAlbum); if(!a) return show("albums");
+  $("#albumTitle").textContent=a.name;
+  $("#albumStats").innerHTML=statsHTML(albumTotals(a.cards));
+  const s=$("#sortSel").value;
+  const cards=[...a.cards].sort((x,y)=> s==="value"?entryValue(y)-entryValue(x) : s==="name"?x.name.localeCompare(y.name) : s==="set"?(x.setName+x.localId).localeCompare(y.setName+y.localId,undefined,{numeric:true}) : y.added-x.added);
+  const g=$("#albumGrid"); g.innerHTML="";
+  if(!cards.length) g.innerHTML=`<p class="muted" style="grid-column:1/-1">Album vuoto. Vai su <b>Scansiona</b> per aggiungere carte.</p>`;
+  cards.forEach(e=>{
+    const el=document.createElement("div"); el.className="tile";
+    el.innerHTML=`<img loading="lazy" src="${img(e)}" alt="">${e.qty>1?`<span class="q">×${e.qty}</span>`:""}
+      <div class="n">${esc(e.name)}</div><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.setName)} #${esc(e.localId)}</div>
+      <div class="row" style="justify-content:space-between;gap:4px"><span class="v">${eur(entryValue(e))}</span><span class="pill">${e.graded?"PSA "+e.graded:e.condition}${e.variant==="holo"?" · RH":""}</span></div>`;
+    el.onclick=()=>openCard(e.cardId, Object.assign({_album:a.id}, e));
+    g.appendChild(el);
+  });
+}
+$("#sortSel").onchange=renderAlbum;
+$("#btnBack").onclick=()=>show("albums");
+$("#btnNewAlbum").onclick=()=>{
+  const n=prompt("Nome del nuovo album (es. Raccoglitore 151, Lotto da vendere):");
+  if(!n||!n.trim()) return;
+  state.albums.push({id:uid(),name:n.trim(),created:Date.now(),cards:[]}); save(); renderAlbums();
+};
+$("#btnAlbumMenu").onclick=()=>{
+  const a=state.albums.find(x=>x.id===currentAlbum);
+  openSheet(`<h2>${esc(a.name)}</h2><div class="list" style="margin-top:12px">
+    <button class="btn" id="mRename">Rinomina album</button>
+    <button class="btn" id="mRefresh">↻ Aggiorna prezzi di questo album</button>
+    <button class="btn" id="mCsv">Esporta lotto in CSV</button>
+    <button class="btn danger" id="mDelete">Elimina album</button></div>`);
+  $("#mRename").onclick=()=>{ const n=prompt("Nuovo nome:",a.name); if(n&&n.trim()){a.name=n.trim();save();renderAlbum();} closeSheet(); };
+  $("#mRefresh").onclick=async()=>{ closeSheet(); await refreshPrices(a.cards); renderAlbum(); };
+  $("#mCsv").onclick=()=>{ exportCSV(a.cards, a.name); closeSheet(); };
+  $("#mDelete").onclick=()=>{
+    if(state.albums.length===1) return toast("Deve esistere almeno un album");
+    if(!confirm(`Eliminare "${a.name}" e le sue ${a.cards.length} carte? L'operazione non si può annullare.`)) return;
+    state.albums=state.albums.filter(x=>x.id!==a.id); save(); closeSheet(); show("albums");
+  };
+};
+async function refreshPrices(cards){
+  if(!cards.length) return toast("Nessuna carta da aggiornare");
+  const ids=[...new Set(cards.map(c=>c.cardId))]; let done=0;
+  toast(`Aggiornamento 0/${ids.length}…`);
+  for(let i=0;i<ids.length;i+=6){
+    await Promise.all(ids.slice(i,i+6).map(async id=>{
+      delete mem[`${API}/en/cards/${encodeURIComponent(id)}`];
+      try{ const d=await getCard(id); cards.filter(c=>c.cardId===id).forEach(c=>{c.cm=cmPrices(d); c.updated=Date.now();}); }catch(e){}
+      done++;
+    }));
+    toast(`Aggiornamento ${done}/${ids.length}…`);
+  }
+  save(); toast("Prezzi aggiornati");
+}
+$("#btnRefreshAll").onclick=async()=>{ await refreshPrices(state.albums.flatMap(a=>a.cards)); renderAlbums(); };
+
+/* ====================== SETTINGS ====================== */
+function renderSettings(){
+  $("#setPriceField").value=state.settings.priceField;
+  $("#setGradeCost").value=state.settings.gradeCost;
+  const m=state.settings.mult;
+  $("#multTable").innerHTML=`<tr><th>Voto</th><th>Moderne (×)</th><th>Vintage (×)</th></tr>`+
+    GRADES.map(g=>`<tr><td><b>PSA ${g}</b></td><td><input type="number" step="0.05" min="0" data-k="modern" data-g="${g}" value="${m.modern[g]}"></td><td><input type="number" step="0.05" min="0" data-k="vintage" data-g="${g}" value="${m.vintage[g]}"></td></tr>`).join("");
+  document.querySelectorAll("#multTable input").forEach(i=>i.onchange=()=>{ const v=parseFloat(i.value); if(v>=0){ state.settings.mult[i.dataset.k][i.dataset.g]=v; save(); } });
+}
+$("#setPriceField").onchange=e=>{ state.settings.priceField=e.target.value; save(); };
+$("#setGradeCost").onchange=e=>{ state.settings.gradeCost=Math.max(0,parseFloat(e.target.value)||0); save(); };
+$("#btnResetMult").onclick=()=>{ state.settings.mult=JSON.parse(JSON.stringify(DEFAULT_MULT)); save(); renderSettings(); toast("Coefficienti ripristinati"); };
+
+let dlCap; // claude.ai artifact viewer: downloads go through the platform capability
+if(window.claude && window.claude.use) window.claude.use("downloads").then(d=>dlCap=d).catch(()=>{});
+async function download(name, data, type){
+  if(dlCap){
+    try{ await dlCap.save({filename:name, data:new Blob([data],{type})}); }
+    catch(e){ if(e && e.code!=="declined") toast("Download non disponibile qui"); }
+    return;
+  }
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([data],{type})); a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+$("#btnExport").onclick=()=>download(`cardvault-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(state,null,1), "application/json");
+$("#importFile").onchange=e=>{
+  const f=e.target.files[0]; if(!f) return; e.target.value="";
+  f.text().then(t=>{
+    const d=JSON.parse(t);
+    if(!d.albums) throw 0;
+    if(!confirm("Sostituire la collezione attuale con il backup?")) return;
+    localStorage.setItem(LS_KEY, JSON.stringify(d)); state=load(); save(); renderSettings(); toast("Backup importato");
+  }).catch(()=>toast("File non valido"));
+};
+function exportCSV(cards, name){
+  const rows=[["Nome","Espansione","Numero","Variante","Condizione","Quantità","Prezzo unitario €","Valore totale €","Stima PSA 9 €","Stima PSA 10 €","Prezzo pagato €"]];
+  cards.forEach(e=>{
+    const raw=pickPrice(e.cm,e.variant,state.settings.priceField), g=gradedEstimates(raw,e.setId)||{};
+    rows.push([e.name,e.setName,`${e.localId}/${e.printed||""}`,e.variant==="holo"?"Reverse/Holo":"Normale",e.graded?"PSA "+e.graded:e.condition,e.qty,(raw||0).toFixed(2),entryValue(e).toFixed(2),(g["9"]||0).toFixed(2),(g["10"]||0).toFixed(2),e.buyPrice??""]);
+  });
+  const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(";")).join("\n");
+  download(`${(name||"collezione").replace(/[^\w\- ]/g,"")}.csv`, "﻿"+csv, "text/csv");
+}
+$("#btnCsv").onclick=()=>exportCSV(state.albums.flatMap(a=>a.cards.map(c=>Object.assign({},c,{setName:c.setName}))),"collezione");
+
+/* ====================== NAV ====================== */
+function show(tab){
+  document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+  $("#v-"+tab).classList.add("active");
+  const navTab = tab==="album"?"albums":tab;
+  document.querySelectorAll("nav.tabs button").forEach(b=>b.classList.toggle("on",b.dataset.tab===navTab));
+  if(tab!=="scan") stopCam();
+  if(tab==="albums") renderAlbums();
+  if(tab==="album") renderAlbum();
+  if(tab==="settings") renderSettings();
+  window.scrollTo(0,0);
+}
+document.querySelectorAll("nav.tabs button").forEach(b=>b.onclick=()=>show(b.dataset.tab));
+renderHeader();
+getSets().catch(()=>{});
+if("serviceWorker" in navigator && window.top===window && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>
