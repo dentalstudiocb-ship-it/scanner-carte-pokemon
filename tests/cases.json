@@ -1,0 +1,170 @@
+[
+ {
+  "id": "sm4-57",
+  "lang": "en",
+  "expectName": "Buzzwole GX",
+  "note": "Buzzwole-GX regular print (base of 3 sm4 printings, same name) [rarity: Ultra Rare]",
+  "image": "https://assets.tcgdex.net/en/sm/sm4/57/high.png"
+ },
+ {
+  "id": "sm4-104",
+  "lang": "en",
+  "expectName": "Buzzwole GX",
+  "note": "Buzzwole-GX full art 104/111, same name as 57 and 115 [rarity: Ultra Rare]",
+  "image": "https://assets.tcgdex.net/en/sm/sm4/104/high.png"
+ },
+ {
+  "id": "sm4-115",
+  "lang": "en",
+  "expectName": "Buzzwole GX",
+  "note": "Buzzwole-GX rainbow secret 115/111 (number > official count), rarity 'Secret Rare' [rarity: Secret Rare]",
+  "image": "https://assets.tcgdex.net/en/sm/sm4/115/high.png"
+ },
+ {
+  "id": "smp-SM69",
+  "lang": "en",
+  "expectName": "Buzzwole GX",
+  "note": "Buzzwole-GX black star promo SM69 (no X/Y number, set total 248) [rarity: Promo]",
+  "image": "https://assets.tcgdex.net/en/sm/smp/SM69/high.png"
+ },
+ {
+  "id": "sma-SV68",
+  "lang": "en",
+  "expectName": "Buzzwole-GX",
+  "note": "Buzzwole-GX shiny vault SV68/SV94 (Hidden Fates), alphanumeric localId, no Cardmarket price [rarity: Shiny rare]",
+  "image": "https://assets.tcgdex.net/en/sm/sma/SV68/high.png"
+ },
+ {
+  "id": "sm4-120",
+  "lang": "en",
+  "expectName": "Counter Catcher",
+  "note": "Counter Catcher gold secret trainer 120/111 [rarity: Secret Rare]",
+  "image": "https://assets.tcgdex.net/en/sm/sm4/120/high.png"
+ },
+ {
+  "id": "sv03.5-006",
+  "lang": "en",
+  "expectName": "Charizard ex",
+  "note": "Charizard ex 151 regular double rare [rarity: Double rare]",
+  "image": "https://assets.tcgdex.net/en/sv/sv03.5/006/high.png"
+ },
+ {
+  "id": "sv03.5-183",
+  "lang": "en",
+  "expectName": "Charizard ex",
+  "note": "Charizard ex 151 full art ultra rare 183/165 [rarity: Ultra Rare]",
+  "image": "https://assets.tcgdex.net/en/sv/sv03.5/183/high.png"
+ },
+ {
+  "id": "sv03.5-199",
+  "lang": "en",
+  "expectName": "Charizard ex",
+  "note": "Charizard ex 151 special illustration rare 199/165 (full-bleed art, text hard to read) [rarity: Special illustration rare]",
+  "image": "https://assets.tcgdex.net/en/sv/sv03.5/199/high.png"
+ },
+ {
+  "id": "sv03-125",
+  "lang": "en",
+  "expectName": "Charizard ex",
+  "note": "Charizard ex Obsidian Flames regular (same name, different set than 151) [rarity: Double rare]",
+  "image": "https://assets.tcgdex.net/en/sv/sv03/125/high.png"
+ },
+ {
+  "id": "sv03-223",
+  "lang": "en",
+  "expectName": "Charizard ex",
+  "note": "Charizard ex Obsidian Flames SIR 223/197 [rarity: Special illustration rare]",
+  "image": "https://assets.tcgdex.net/en/sv/sv03/223/high.png"
+ },
+ {
+  "id": "sv03-228",
+  "lang": "en",
+  "expectName": "Charizard ex",
+  "note": "Charizard ex Obsidian Flames gold hyper rare 228/197 (gold foil, low contrast text) [rarity: Hyper rare]",
+  "image": "https://assets.tcgdex.net/en/sv/sv03/228/high.png"
+ },
+ {
+  "id": "sv04.5-234",
+  "lang": "en",
+  "expectName": "Charizard ex",
+  "note": "Charizard ex Paldean Fates shiny SIR 234/091 (number far above official count) [rarity: Special illustration rare]",
+  "image": "https://assets.tcgdex.net/en/sv/sv04.5/234/high.png"
+ },
+ {
+  "id": "sv01-256",
+  "lang": "en",
+  "expectName": "Rare Candy",
+  "note": "Rare Candy gold hyper rare trainer 256/198 [rarity: Hyper rare]",
+  "image": "https://assets.tcgdex.net/en/sv/sv01/256/high.png"
+ },
+ {
+  "id": "swsh1-211",
+  "lang": "en",
+  "expectName": "Zacian V",
+  "note": "Zacian V rainbow secret 211/202 [rarity: Secret Rare]",
+  "image": "https://assets.tcgdex.net/en/swsh/swsh1/211/high.png"
+ },
+ {
+  "id": "base1-4",
+  "lang": "en",
+  "expectName": "Charizard",
+  "note": "Base Set Charizard 4/102, vintage layout (no set code, number at bottom right) [rarity: Rare]",
+  "image": "https://assets.tcgdex.net/en/base/base1/4/high.png"
+ },
+ {
+  "id": "sm3-117",
+  "lang": "en",
+  "expectName": "Lana",
+  "note": "Lana trainer 117/147 (sm3) - trainer layout, small text [rarity: Uncommon]",
+  "image": "https://assets.tcgdex.net/en/sm/sm3/117/high.png"
+ },
+ {
+  "id": "sv08-238",
+  "lang": "en",
+  "expectName": "Pikachu ex",
+  "note": "Pikachu ex Surging Sparks SIR 238/191 [rarity: Special illustration rare]",
+  "image": "https://assets.tcgdex.net/en/sv/sv08/238/high.png"
+ },
+ {
+  "id": "sm4-115",
+  "lang": "it",
+  "expectName": "Buzzwole GX",
+  "note": "ITALIAN Buzzwole-GX rainbow secret; IT set total is 124 vs EN 125 [rarity: Segreto rara]",
+  "image": "https://assets.tcgdex.net/it/sm/sm4/115/high.png"
+ },
+ {
+  "id": "sv03.5-199",
+  "lang": "it",
+  "expectName": "Charizard-ex",
+  "note": "ITALIAN Charizard-ex 151 SIR (IT name has hyphen 'Charizard-ex') [rarity: Rara illustrazione speciale]",
+  "image": "https://assets.tcgdex.net/it/sv/sv03.5/199/high.png"
+ },
+ {
+  "id": "sv03-228",
+  "lang": "it",
+  "expectName": "Charizard-ex",
+  "note": "ITALIAN Charizard-ex gold hyper rare 228/197 [rarity: Rara iper]",
+  "image": "https://assets.tcgdex.net/it/sv/sv03/228/high.png"
+ },
+ {
+  "id": "SV2a-006",
+  "lang": "ja",
+  "expectName": "リザードンex",
+  "note": "JAPANESE Charizard ex (リザードンex) Pokemon Card 151 regular [rarity: Double rare]",
+  "image": "https://assets.tcgdex.net/ja/SV/SV2a/006/high.png"
+ },
+ {
+  "id": "SV2a-201",
+  "lang": "ja",
+  "expectName": "リザードンex",
+  "note": "JAPANESE Charizard ex SAR 201/165 (EN equivalent is 199 - numbering differs) [rarity: Special illustration rare]",
+  "image": "https://assets.tcgdex.net/ja/SV/SV2a/201/high.png"
+ },
+ {
+  "id": "SV2a-208",
+  "lang": "ja",
+  "expectName": "ミュウex",
+  "note": "JAPANESE Mew ex gold 'Mega Hyper Rare' 208/165 [rarity: Mega Hyper Rare]",
+  "image": "https://assets.tcgdex.net/ja/SV/SV2a/208/high.png"
+ }
+]

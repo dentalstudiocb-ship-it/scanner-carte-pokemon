@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner Accuracy Test</title>
+<style>
+  :root { --bg:#f6f4f0; --fg:#1d1b18; --muted:#6b665e; --line:#ddd6cb; --pass:#1f7a3a; --fail:#b3261e; --card:#fff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161513; --fg:#ece8e1; --muted:#a39d93; --line:#34312c; --pass:#5cc47c; --fail:#ff7a6e; --card:#1f1d1a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; }
+  h1 { font-size:20px; margin:0 0 8px; }
+  #status { color:var(--muted); margin-bottom:12px; }
+  #summary { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; min-width:140px; }
+  .tile b { font-size:22px; display:block; font-variant-numeric: tabular-nums; }
+  .wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; background:var(--card); font-variant-numeric: tabular-nums; }
+  th, td { border-bottom:1px solid var(--line); padding:4px 8px; text-align:left; white-space:nowrap; }
+  td.note { white-space:normal; color:var(--muted); font-size:12px; min-width:200px; }
+  .PASS { color:var(--pass); font-weight:600; }
+  .FAIL { color:var(--fail); font-weight:600; }
+  .pending { color:var(--muted); }
+  #preview { width:156px; height:218px; border:1px solid var(--line); vertical-align:top; }
+  #frameBox { margin:12px 0; display:flex; gap:12px; align-items:flex-start; }
+  #app { width:320px; height:218px; border:1px solid var(--line); }
+  .controls { margin-bottom:12px; color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<h1>Scanner accuracy test</h1>
+<div id="status">Caricamento casi…</div>
+<div class="controls">Parametri URL: <code>?only=sm4-115,SV2a-201</code> · <code>?levels=clean,mild</code> · <code>?tries=3</code></div>
+<div id="summary"></div>
+<div id="frameBox">
+  <canvas id="preview" width="780" height="1088" title="ultimo frame simulato"></canvas>
+  <iframe id="app" src="index.html" title="app"></iframe>
+</div>
+<div class="wrap">
+<table>
+  <thead><tr><th>#</th><th>case</th><th>lang</th><th>level</th><th>expected id</th><th>got id</th><th>got name</th><th>sure</th><th>how</th><th>tries</th><th>time (s)</th><th>result</th><th>note</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+</div>
+<script>
+(function () {
+  'use strict';
+  var W = 780, H = 1088, CARD_W = Math.round(W * 0.88), CARD_H = Math.round(CARD_W * 88 / 63);
+  var CALL_TIMEOUT = 20000, WAIT_HOOK_MS = 30000;
+  var params = new URLSearchParams(location.search);
+  var ALL_LEVELS = ['clean', 'mild', 'hard'];
+  var LEVELS = params.get('levels') ? params.get('levels').split(',').filter(function (l) { return ALL_LEVELS.indexOf(l) >= 0; }) : ALL_LEVELS;
+  var TRIES = Math.max(1, parseInt(params.get('tries') || '3', 10) || 3);
+  var ONLY = params.get('only') ? params.get('only').split(',') : null;
+
+  var statusEl = document.getElementById('status');
+  var rowsEl = document.getElementById('rows');
+  var summaryEl = document.getElementById('summary');
+  var preview = document.getElementById('preview');
+  var iframe = document.getElementById('app');
+
+  window.__done = false;
+  window.__results = [];
+
+  function setStatus(t) { statusEl.textContent = t; }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function cell(tr, text, cls) { var td = document.createElement('td'); td.textContent = text == null ? '' : String(text); if (cls) td.className = cls; tr.appendChild(td); return td; }
+
+  // Simulated phone-camera frame. Seed varies the jitter between consecutive "frames".
+  function renderFrame(img, level, seed) {
+    var c = document.createElement('canvas'); c.width = W; c.height = H;
+    var ctx = c.getContext('2d');
+    // brownish table background with a soft vignette
+    ctx.fillStyle = '#6b4f3a'; ctx.fillRect(0, 0, W, H);
+    var vg = ctx.createRadialGradient(W / 2, H / 2, W * 0.2, W / 2, H / 2, H * 0.75);
+    vg.addColorStop(0, 'rgba(140,105,75,0.35)'); vg.addColorStop(1, 'rgba(30,20,12,0.45)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+
+    var jitter = (seed % 3) - 1; // -1, 0, 1 between tries
+    var blur = 0, rot = 0, dx = 0, dy = 0;
+    if (level === 'mild') { blur = 0.6; rot = 2 + jitter * 0.3; }
+    if (level === 'hard') { blur = 1.2; rot = -(3 + jitter * 0.3); dx = W * 0.02; dy = H * 0.02 * (jitter >= 0 ? 1 : -1); }
+
+    ctx.save();
+    ctx.translate(W / 2 + dx, H / 2 + dy);
+    ctx.rotate(rot * Math.PI / 180);
+    if (blur) ctx.filter = 'blur(' + blur + 'px)';
+    ctx.drawImage(img, -CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H);
+    ctx.restore();
+    ctx.filter = 'none';
+
+    if (level === 'hard') {
+      ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(0, 0, W, H); // slight darkening
+      var gx = W * 0.74, gy = H * 0.2, gr = W * 0.32;
+      var g = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
+      g.addColorStop(0, 'rgba(255,255,255,0.85)');
+      g.addColorStop(0.35, 'rgba(255,255,255,0.45)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+    return c;
+  }
+
+  function withTimeout(p, ms) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { reject(new Error('timeout ' + ms + 'ms')); }, ms);
+      Promise.resolve(p).then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
+    });
+  }
+
+  function loadImage(url) {
+    return fetch(url, { mode: 'cors' }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+      return r.blob();
+    }).then(function (b) {
+      if (window.createImageBitmap) return createImageBitmap(b);
+      return new Promise(function (res, rej) { var i = new Image(); i.onload = function () { res(i); }; i.onerror = rej; i.src = URL.createObjectURL(b); });
+    });
+  }
+
+  function waitForHook() {
+    var t0 = Date.now();
+    return new Promise(function (resolve) {
+      (function poll() {
+        var fn = null;
+        try { fn = iframe.contentWindow && iframe.contentWindow.scanOnce; } catch (e) { fn = null; }
+        if (typeof fn === 'function') return resolve(fn.bind(iframe.contentWindow));
+        if (Date.now() - t0 > WAIT_HOOK_MS) return resolve(null);
+        setTimeout(poll, 250);
+      })();
+    });
+  }
+
+  function renderSummary(results) {
+    summaryEl.innerHTML = '';
+    var groups = LEVELS.concat(['total']);
+    groups.forEach(function (lv) {
+      var rs = results.filter(function (r) { return lv === 'total' || r.level === lv; });
+      var pass = rs.filter(function (r) { return r.pass; }).length;
+      var answered = rs.filter(function (r) { return r.gotId; }).length;
+      var wrongSure = rs.filter(function (r) { return r.gotId && !r.pass && r.sure; }).length;
+      var d = document.createElement('div'); d.className = 'tile';
+      var pct = rs.length ? Math.round(100 * pass / rs.length) : 0;
+      d.innerHTML = '<span></span><b></b><small></small>';
+      d.children[0].textContent = lv;
+      d.children[1].textContent = pct + '%';
+      d.children[2].textContent = pass + '/' + rs.length + ' pass · ' + answered + ' answered · ' + wrongSure + ' wrong&sure';
+      summaryEl.appendChild(d);
+    });
+  }
+
+  function run(cases) {
+    // Enumerate all rows first (pending)
+    var jobs = [];
+    cases.forEach(function (c, ci) {
+      LEVELS.forEach(function (lv) {
+        var tr = document.createElement('tr');
+        cell(tr, jobs.length + 1);
+        cell(tr, c.expectName);
+        cell(tr, c.lang);
+        cell(tr, lv);
+        cell(tr, c.id);
+        var cells = [cell(tr, '…', 'pending'), cell(tr, ''), cell(tr, ''), cell(tr, ''), cell(tr, ''), cell(tr, ''), cell(tr, 'pending', 'pending')];
+        cell(tr, c.note, 'note');
+        rowsEl.appendChild(tr);
+        jobs.push({ c: c, level: lv, cells: cells });
+      });
+    });
+    setStatus(cases.length + ' casi × ' + LEVELS.length + ' livelli = ' + jobs.length + ' test. In attesa di scanOnce…');
+
+    return waitForHook().then(function (scanOnce) {
+      if (!scanOnce) {
+        setStatus('scanOnce non disponibile — test interrotto (' + jobs.length + ' test enumerati).');
+        jobs.forEach(function (j) { j.cells[6].textContent = 'skipped'; });
+        window.__results = { error: 'scanOnce non disponibile', cases: cases.length, results: [] };
+        window.__done = true;
+        return;
+      }
+      var results = [];
+      var imgCache = {};
+      var idx = 0;
+      function next() {
+        if (idx >= jobs.length) return Promise.resolve();
+        var j = jobs[idx++];
+        var c = j.c;
+        setStatus('Test ' + idx + '/' + jobs.length + ': ' + c.lang + ' ' + c.id + ' [' + j.level + ']');
+        var url = c.image;
+        var imgP = imgCache[c.lang + ':' + c.id] || (imgCache[c.lang + ':' + c.id] = loadImage(url));
+        var rec = { id: c.id, lang: c.lang, expectName: c.expectName, level: j.level, gotId: null, gotName: null, gotLang: null, sure: null, how: null, tries: 0, ms: 0, pass: false, error: null, attempts: [] };
+        var t0 = performance.now();
+        return imgP.then(function (img) {
+          var attempt = 0;
+          function tryOnce() {
+            if (attempt >= TRIES) return Promise.resolve(null);
+            var frame = renderFrame(img, j.level, attempt);
+            attempt++;
+            var pctx = preview.getContext('2d'); pctx.drawImage(frame, 0, 0);
+            var ta = performance.now();
+            return withTimeout(scanOnce(frame), CALL_TIMEOUT).then(function (res) {
+              rec.attempts.push({ ms: Math.round(performance.now() - ta), result: res || null });
+              return res ? res : tryOnce();
+            }, function (err) {
+              rec.attempts.push({ ms: Math.round(performance.now() - ta), error: String(err && err.message || err) });
+              return tryOnce();
+            });
+          }
+          return tryOnce();
+        }).then(function (res) {
+          rec.tries = rec.attempts.length;
+          if (res) { rec.gotId = res.id || null; rec.gotName = res.name || null; rec.gotLang = res.lang || null; rec.sure = !!res.sure; rec.how = res.how || null; }
+          else {
+            var errs = rec.attempts.filter(function (a) { return a.error; });
+            if (errs.length) rec.error = errs[errs.length - 1].error;
+          }
+        }, function (err) {
+          rec.error = String(err && err.message || err);
+        }).then(function () {
+          rec.ms = Math.round(performance.now() - t0);
+          rec.pass = !!rec.gotId && rec.gotId === c.id;
+          results.push(rec);
+          window.__results = results;
+          var cl = j.cells;
+          cl[0].textContent = rec.gotId || (rec.error ? 'ERR: ' + rec.error : 'null'); cl[0].className = '';
+          cl[1].textContent = rec.gotName ? rec.gotName + (rec.gotLang ? ' (' + rec.gotLang + ')' : '') : '';
+          cl[2].textContent = rec.sure == null ? '' : (rec.sure ? 'yes' : 'no');
+          cl[3].textContent = rec.how || '';
+          cl[4].textContent = rec.tries;
+          cl[5].textContent = (rec.ms / 1000).toFixed(1);
+          cl[6].textContent = rec.pass ? 'PASS' : 'FAIL'; cl[6].className = rec.pass ? 'PASS' : 'FAIL';
+          renderSummary(results);
+          return next();
+        });
+      }
+      return next().then(function () {
+        var pass = results.filter(function (r) { return r.pass; }).length;
+        setStatus('Finito: ' + pass + '/' + results.length + ' PASS.');
+        window.__done = true;
+      });
+    });
+  }
+
+  fetch('tests/cases.json', { cache: 'no-store' }).then(function (r) {
+    if (!r.ok) throw new Error('cases.json HTTP ' + r.status);
+    return r.json();
+  }).then(function (cases) {
+    cases.forEach(function (c) {
+      if (!c.image) {
+        // fallback when a case has no explicit image: resolve from the TCGdex API
+        c.image = null;
+      }
+    });
+    if (ONLY) cases = cases.filter(function (c) { return ONLY.indexOf(c.id) >= 0; });
+    // resolve missing images via API
+    return Promise.all(cases.map(function (c) {
+      if (c.image) return c;
+      return fetch('https://api.tcgdex.net/v2/' + c.lang + '/cards/' + encodeURIComponent(c.id)).then(function (r) { return r.json(); })
+        .then(function (d) { c.image = d.image ? d.image + '/high.png' : null; return c; });
+    }));
+  }).then(run).catch(function (e) {
+    setStatus('Errore: ' + (e && e.message || e));
+    window.__results = { error: String(e && e.message || e), results: [] };
+    window.__done = true;
+    console.error(e);
+  });
+})();
+</script>
+</body>
+</html>
