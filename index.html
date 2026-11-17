@@ -116,7 +116,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v5</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -138,9 +138,12 @@ td.r,th.r{text-align:right}
   <div class="row">
     <button class="btn primary grow" id="btnCam">Avvia scanner</button>
     <button class="btn grow" id="btnSnap" style="display:none">■ Ferma scanner</button>
+    <button class="btn" id="btnZoom" style="display:none">Zoom 2×</button>
+    <button class="btn" id="btnDiag" title="Diagnosi">🔍</button>
     <label class="btn grow" style="margin:0">Carica foto<input type="file" id="file" accept="image/*" hidden></label>
     <input type="file" id="fileCam" accept="image/*" capture="environment" hidden>
   </div>
+  <div id="diag" class="card" style="display:none;margin-top:10px"></div>
   <div id="ocrBox" style="display:none">
     <div class="progress"><div id="ocrBar"></div></div>
     <div class="small muted" id="ocrStatus"></div>
@@ -240,6 +243,7 @@ td.r,th.r{text-align:right}
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="cardfind.js?v=5"></script>
 <script>
 "use strict";
 /* ====================== CONFIG & STATE ====================== */
@@ -410,11 +414,12 @@ let noNumTicks=0, lastNameWord=null, lastLang=null; const nameCache={};
 $("#btnCam").onclick = async ()=>{
   if(!liveCamOK){ $("#fileCam").click(); return; }
   try{
-    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:2560},height:{ideal:1440}},audio:false});
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:3840},height:{ideal:2160},frameRate:{ideal:30}},audio:false});
   }catch(e){ toast("Permesso fotocamera negato: usa 'Carica foto'"); return; }
   const v=$("#video"); v.srcObject=stream; v.style.display="block";
   try{ const tr=stream.getVideoTracks()[0], caps=tr.getCapabilities?tr.getCapabilities():{};
-       if(caps.focusMode && caps.focusMode.includes("continuous")) tr.applyConstraints({advanced:[{focusMode:"continuous"}]}); }catch(e){}
+       if(caps.focusMode && caps.focusMode.includes("continuous")) tr.applyConstraints({advanced:[{focusMode:"continuous"}]});
+       setupZoom(tr, caps); }catch(e){}
   $("#shot").style.display="none"; $("#camEmpty").style.display="none";
   ["#frame","#camHint","#scanline"].forEach(s=>$(s).style.display="block");
   $("#frame").classList.remove("hit"); $("#liveRes").style.display="none";
@@ -429,6 +434,46 @@ $("#btnCam").onclick = async ()=>{
 };
 $("#btnSnap").onclick = ()=>stopCam();
 
+// Zoom: lets you hold the phone far enough to be in focus while the card still fills the frame
+let zoomTrack=null, zoomCaps=null, zoomOn=false;
+function setupZoom(tr, caps){
+  zoomTrack=tr; zoomCaps=caps&&caps.zoom;
+  if(!zoomCaps || zoomCaps.max<1.5){ $("#btnZoom").style.display="none"; return; }
+  $("#btnZoom").style.display=""; setZoom(true);
+}
+function setZoom(on){
+  if(!zoomTrack||!zoomCaps) return;
+  zoomOn=on; const z=on?Math.min(2, zoomCaps.max):Math.max(1, zoomCaps.min||1);
+  zoomTrack.applyConstraints({advanced:[{zoom:z}]}).catch(()=>{});
+  $("#btnZoom").textContent = on ? "Zoom 1×" : "Zoom 2×";
+}
+$("#btnZoom").onclick=()=>setZoom(!zoomOn);
+// Diagnostics: what the scanner saw and what it compared
+let diagOn=false; try{ diagOn=localStorage.getItem("cardvault.diag")==="1"; }catch(e){}
+$("#btnDiag").onclick=()=>{ diagOn=!diagOn; try{ localStorage.setItem("cardvault.diag",diagOn?"1":"0"); }catch(e){} $("#diag").style.display=diagOn?"":"none"; if(diagOn&&lastDiag) showDiag(lastDiag.card); };
+function showDiag(card){
+  if(!diagOn || !lastDiag) return;
+  const v=$("#video"), d=lastDiag;
+  let thumb=""; try{ const t=document.createElement("canvas"); t.width=126; t.height=176; t.getContext("2d").drawImage(card,0,0,126,176); thumb=t.toDataURL("image/jpeg",0.7); }catch(e){}
+  $("#diag").style.display="";
+  $("#diag").innerHTML=`<div class="small muted">Fotocamera: ${v.videoWidth||"?"}×${v.videoHeight||"?"} · zoom ${zoomOn?"2×":"1×"} · ${esc(card._how||"cornice")} · DB immagini: ${visCount()} carte · lingua ${esc(d.detected||"?")}</div>
+   <div class="row" style="align-items:flex-start;margin-top:6px"><img src="${thumb}" style="width:84px;border-radius:6px;border:1px solid var(--line)" alt="">
+   <div class="grow small">Nome letto: <b>${esc(d.nameText||"—")}</b><br>Numero letto: <b>${esc(d.seen||"—")}</b>
+   ${d.cands.map((c,i)=>`<div style="margin-top:4px">${i+1}. ${esc(c.name||c.id)} <span class="muted">${esc(c.id)} · img ${c._vis!=null?Math.round(c._vis):"-"} · verifica ${c._ver!=null?c._ver.toFixed(2):"-"} · num ${c._n} · tot ${Math.round(c._score)}</span></div>`).join("")}</div></div>`;
+}
+function visCount(){ let n=0; for(const k in visDB){ if(visDB[k]._n) n+=visDB[k]._n; } return n||"in caricamento"; }
+function grabFrame(){
+  const v=$("#video"), s=Math.min(1, 1600/Math.max(v.videoWidth,v.videoHeight));
+  const c=document.createElement("canvas"); c.width=Math.round(v.videoWidth*s); c.height=Math.round(v.videoHeight*s);
+  c.getContext("2d").drawImage(v,0,0,c.width,c.height); return c;
+}
+function locateFromVideo(){
+  try{
+    const fr=grabFrame(), f=CardFind.findCard(fr);
+    if(f && f.score>=0.3){ const w=CardFind.warp(fr,f.corners,630,880); w._how="ritaglio automatico"; return w; }
+  }catch(e){ console.warn(e); }
+  return null;
+}
 function grabCard(){
   const v=$("#video"), box=v.getBoundingClientRect(), fr=$("#frame").getBoundingClientRect();
   const vw=v.videoWidth, vh=v.videoHeight, scale=Math.max(box.width/vw, box.height/vh);
@@ -496,6 +541,7 @@ function loadVisDB(lang){
       const v=(document.querySelector('meta[name="db-version"]')||{}).content||"1";
       const [bin, ids]=await Promise.all([cachedBinary(`data/hashes-${lang}.bin?v=${v}`), cachedJSON(`data/ids-${lang}.json?v=${v}`, 14)]);
       if(bin.length!==ids.length*60) throw new Error("db size mismatch");
+      visDB[lang]._n=ids.length;
       return {bin, ids};
     })();
     visDB[lang].catch(()=>delete visDB[lang]);
@@ -672,19 +718,79 @@ async function analyzeCard(card){
     c._score = vs + (c._inName?30:0) + c._n*0.6 + famBonus;
   });
   cands.sort((x,y)=> y._score-x._score || (y._order||0)-(x._order||0));
+  // Final check: compare the card with the REAL pictures of the most likely printings (normal vs full art vs gold…)
+  await verifyTop(card, cands, 6);
+  cands.sort((x,y)=> y._score-x._score || (y._order||0)-(x._order||0));
+  lastDiag={card, cands:cands.slice(0,4), seen, nameText:(nameWords||nameText).slice(0,40), lang, detected};
   const t=cands[0], second=cands[1];
   if(!t) return {...base, best:null, cands:[], sure:false, how:"niente"};
   const margin = t._score - (second?second._score:0);
   const how = [t._vis!=null&&t._vis===vbest?"immagine":null, t._inName?"nome":null, t._n>=80?"numero":t._n>=40?"numero parziale":null].filter(Boolean).join("+") || "debole";
-  const agree = (t._vis!=null && t._vis===vbest ? 1:0) + (t._inName?1:0) + (t._n>=80?1:0);
+  const agree = (t._vis!=null && t._vis===vbest ? 1:0) + (t._inName?1:0) + (t._n>=80?1:0) + (t._ver!=null && t._ver>=0.55 ? 1:0);
   // language unclear and a twin with the same art exists in the other language → ask, don't guess
   const twin = !detected && cands.slice(1,4).some(c=>(c.lang==="ja")!==(t.lang==="ja") && c._vis!=null && t._vis!=null && Math.abs(c._vis-t._vis)<25);
-  const sure = !twin && ((agree>=2 && margin>=8) || (t._n>=80 && t._inName));
+  const sure = !twin && ((agree>=2 && margin>=8) || (t._n>=80 && t._inName) || (t._ver!=null && t._ver>=0.7 && margin>=10));
   const ok = sure || (agree>=1 && margin>=4) || t._n>=40;
   if(ok) return {...base, best:t, cands, sure, how, word:nc.word};
   return {...base, best:null, cands: nc.list.length?cands.filter(c=>c._inName):[], sure:false, how:"incerto: "+how, word:nc.word};
 }
+
+/* ---------- Verification against real card pictures ---------- */
+const verCache={};
+// 48x66 gray (zero-mean, unit-var) + 6x8 chroma grid, from any upright card image
+function verDesc(src, sx=0, sy=0, sw=src.width, sh=src.height){
+  const c=document.createElement("canvas"); c.width=48; c.height=66;
+  const x=c.getContext("2d",{willReadFrequently:true}); x.imageSmoothingEnabled=true; x.imageSmoothingQuality="high";
+  x.fillStyle="#fff"; x.fillRect(0,0,48,66); x.drawImage(src,sx,sy,sw,sh,0,0,48,66);
+  const p=x.getImageData(0,0,48,66).data, g=new Float32Array(48*66); let m=0;
+  for(let i=0;i<g.length;i++){ g[i]=0.299*p[i*4]+0.587*p[i*4+1]+0.114*p[i*4+2]; m+=g[i]; }
+  m/=g.length; let v=0; for(let i=0;i<g.length;i++){ g[i]-=m; v+=g[i]*g[i]; } v=Math.sqrt(v/g.length)||1; for(let i=0;i<g.length;i++) g[i]/=v;
+  const ch=new Float32Array(6*8*2);
+  for(let gy=0;gy<8;gy++) for(let gx=0;gx<6;gx++){ let R=0,G=0,B=0;
+    for(let y=Math.floor(gy*66/8);y<Math.floor((gy+1)*66/8);y++) for(let xx=gx*8;xx<gx*8+8;xx++){ const i=(y*48+xx)*4; R+=p[i];G+=p[i+1];B+=p[i+2]; }
+    const S=R+G+B+1; ch[(gy*6+gx)*2]=R/S; ch[(gy*6+gx)*2+1]=G/S; }
+  return {g, ch};
+}
+function verSim(a,b){
+  let ncc=0; for(let i=0;i<a.g.length;i++) ncc+=a.g[i]*b.g[i]; ncc/=a.g.length;
+  let cd=0; for(let i=0;i<a.ch.length;i++) cd+=Math.abs(a.ch[i]-b.ch[i]); cd/=a.ch.length;
+  return ncc - cd*6;      // colour differences (gold vs silver/yellow) weigh a lot
+}
+function candImageURL(c){ return c.image ? c.image+"/low.png" : null; }
+function getVerDesc(c){
+  const u=candImageURL(c); if(!u) return Promise.resolve(null);
+  if(!verCache[u]) verCache[u]=fetch(u).then(r=>r.ok?r.blob():Promise.reject()).then(b=>createImageBitmap(b)).then(im=>verDesc(im)).catch(()=>null);
+  return verCache[u];
+}
+async function verifyTop(card, cands, k){
+  const top=cands.slice(0,k).filter(c=>c.image);
+  if(!top.length) return;
+  // query: a few crops so small misalignment doesn't matter
+  const W=card.width, H=card.height, qs=[];
+  for(const z of [1,0.96,0.92]) for(const [dx,dy] of [[0,0],[0.015,0],[-0.015,0],[0,0.015],[0,-0.015]]){
+    const w=W*z,h=H*z; qs.push(verDesc(card,(W-w)/2+dx*W,(H-h)/2+dy*H,w,h)); }
+  const ds=await Promise.all(top.map(getVerDesc));
+  top.forEach((c,i)=>{ if(!ds[i]) return; let best=-9; for(const q of qs) best=Math.max(best, verSim(q,ds[i])); c._ver=best; c._score += Math.max(0,best)*90; });
+}
+let lastDiag=null;
 // Test hook used by test.html
+function locateCard(frame){
+  if(window.CardFind){
+    try{
+      const f=CardFind.findCard(frame);
+      if(f && f.score>=0.3){ const w=CardFind.warp(frame,f.corners,630,880); w._how="ritaglio automatico"; return w; }
+    }catch(e){ console.warn(e); }
+  }
+  // fallback: centred card-shaped crop
+  const W=frame.width, H=frame.height; let cw=W*0.72, ch=cw*88/63; if(ch>H*0.9){ ch=H*0.9; cw=ch*63/88; }
+  const c=document.createElement("canvas"); c.width=630; c.height=880;
+  c.getContext("2d").drawImage(frame,(W-cw)/2,(H-ch)/2,cw,ch,0,0,630,880); c._how="ritaglio centrale"; return c;
+}
+// Test hook for full camera frames (test-photos.html)
+window.scanFrame = async frame => {
+  const r = await analyzeCard(locateCard(frame));
+  return r.best ? {id:r.best.id, name:r.best.name, lang:r.best.lang||r.lang, sure:r.sure, how:r.how} : null;
+};
 window.scanOnce = async canvas => {
   const r = await analyzeCard(canvas);
   return r.best ? {id:r.best.id, name:r.best.name, lang:r.best.lang||r.lang, sure:r.sure, how:r.how} : null;
@@ -696,7 +802,9 @@ async function scanTick(){
   if(busy || !v.videoWidth || $("#sheet").classList.contains("open") || document.hidden){ setTimeout(scanTick,400); return; }
   busy=true;
   try{
-    const r = await analyzeCard(grabCard());
+    const card = window.CardFind ? (locateFromVideo() || grabCard()) : grabCard();
+    const r = await analyzeCard(card);
+    showDiag(card);
     if(!scanning) return;
     if(r.best){
       const t=r.best;
@@ -749,7 +857,7 @@ function stopCam(){
   if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
   ["#video","#frame","#camHint","#scanline","#liveRes"].forEach(s=>$(s).style.display="none");
   if($("#shot").style.display!=="block") $("#camEmpty").style.display="";
-  $("#btnCam").style.display=""; $("#btnSnap").style.display="none";
+  $("#btnCam").style.display=""; $("#btnSnap").style.display="none"; $("#btnZoom").style.display="none";
 }
 function showShot(src){ const i=$("#shot"); i.src=src; i.style.display="block"; i.style.objectFit="contain"; $("#camEmpty").style.display="none"; }
 $("#file").onchange = $("#fileCam").onchange = e=>{
@@ -1237,6 +1345,7 @@ function show(tab){
 document.querySelectorAll("nav.tabs button").forEach(b=>b.onclick=()=>show(b.dataset.tab));
 renderHeader();
 getSets().catch(()=>{});
+if(diagOn) $("#diag").style.display="";
 setTimeout(()=>{ getNameIndex("en").catch(()=>{}); loadVisDB("en").catch(()=>{}); if(state.settings.cardLang==="auto"||state.settings.cardLang==="ja") loadVisDB("ja").catch(()=>{}); }, 1500);   // download the name list once in the background
 if("serviceWorker" in navigator && window.top===window && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
