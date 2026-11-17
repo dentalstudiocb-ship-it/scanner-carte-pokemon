@@ -1,15 +1,19 @@
 /* cardfind.js - dependency-free trading card detector + perspective warp.
-   window.CardFind = { findCard(canvas), warp(canvas, corners, outW, outH) }
-   findCard: downscale -> gray -> blur -> Sobel -> oriented Hough (near-vertical &
-   near-horizontal families) -> enumerate 2+2 line combos -> validate aspect/area ->
-   score by edge support along the quad perimeter -> least-squares line refinement. */
+   window.CardFind = { findCard(canvas) -> {corners[TL,TR,BR,BL], score, method} | null,
+                       warp(canvas, corners, outW=630, outH=880) -> canvas }
+   Corners are in source-canvas pixel coordinates (continuous; pixel i spans [i,i+1)).
+   findCard: downscale to 360px -> gray(+saturation) -> blur -> Sobel -> oriented Hough
+   (near-vertical / near-horizontal families, +-16deg) -> enumerate 2+2 line combos ->
+   validate aspect/area -> score by perimeter edge support, outside quietness and
+   inside/outside contrast -> prefer the largest near-best quad -> outward search for a
+   weak outer edge -> robust least-squares refinement of each side. Test: tools/cardfind-test.html */
 (function () {
   'use strict';
   var WORK_W = 360;
   var ASPECT = 63 / 88;
-  var TH_RANGE = 16, TH_STEP = 0.5;               // degrees around 0 / 90
+  var TH_RANGE = 16, TH_STEP = 1;               // degrees around 0 / 90
   var NTH = Math.round(2 * TH_RANGE / TH_STEP) + 1;
-  var D2R = Math.PI / 180;
+  var D2R = Math.PI / 180, DBG = [], REF_OUT = 5;
 
   function makeCanvas(w, h) {
     var c = document.createElement('canvas'); c.width = w; c.height = h; return c;
@@ -20,8 +24,8 @@
     var sw = src.width, sh = src.height;
     var s = Math.min(1, WORK_W / sw);
     var w = Math.max(8, Math.round(sw * s)), h = Math.max(8, Math.round(sh * s));
-    var c = makeCanvas(w, h), ctx = c.getContext('2d', { willReadFrequently: true });
-    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'medium';
+    var c = makeCanvas(w, h), ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'low';
     ctx.drawImage(src, 0, 0, w, h);
     var d = ctx.getImageData(0, 0, w, h).data;
     var n = w * h, g = new Float32Array(n), t = new Float32Array(n);
@@ -68,7 +72,15 @@
     var target = n * 0.85, acc = 0, bin = 0;
     for (; bin < 256; bin++) { acc += hist[bin]; if (acc >= target) break; }
     var thr = Math.max(bin / k, 24);
-    return { gx: gx, gy: gy, mag: mag, thr: thr };
+    // dilated oriented edge maps for fast perimeter scoring: ev = vertical edges, eh = horizontal
+    var ev = new Uint8Array(n), eh = new Uint8Array(n), t7 = thr * 0.7;
+    for (i = w; i < n - w; i++) {
+      var m = mag[i]; if (m < t7) continue;
+      var ax = Math.abs(gx[i]), ay = Math.abs(gy[i]);
+      if (ax > 0.8 * m) { ev[i - 1] = ev[i] = ev[i + 1] = 1; }
+      if (ay > 0.8 * m) { eh[i - w] = eh[i] = eh[i + w] = 1; }
+    }
+    return { gx: gx, gy: gy, mag: mag, thr: thr, ev: ev, eh: eh };
   }
 
   // ---- oriented Hough ----
@@ -81,7 +93,7 @@
       var th = (f * 90 - TH_RANGE + t * TH_STEP) * D2R;
       cs[f].push(Math.cos(th)); sn[f].push(Math.sin(th));
     }
-    var mag = E.mag, gx = E.gx, gy = E.gy, thr = E.thr, WIN = 6 / TH_STEP; // +-6 deg vote window
+    var mag = E.mag, gx = E.gx, gy = E.gy, thr = E.thr, WIN = 5 / TH_STEP; // +-5 deg vote window
     for (var y = 2; y < h - 2; y++) for (var x = 2; x < w - 2; x++) {
       var i = y * w + x, m = mag[i];
       if (m < thr) continue;
@@ -92,14 +104,14 @@
       else { fam = 1; rel = ang < 0 ? ang + 180 - 90 : ang - 90; if (Math.abs(rel) > TH_RANGE + 6) continue; }
       var c0 = Math.round((rel + TH_RANGE) / TH_STEP);
       var t0 = Math.max(0, c0 - WIN), t1 = Math.min(NTH - 1, c0 + WIN);
-      var wgt = Math.min(m, thr * 4), A = acc[fam], C = cs[fam], S = sn[fam];
+      var wgt = Math.min(m, thr * 2), A = acc[fam], C = cs[fam], S = sn[fam];
       for (t = t0; t <= t1; t++) {
         var r = Math.round(x * C[t] + y * S[t]) + diag;
         A[t * nR + r] += wgt;
       }
     }
     var out = [];
-    for (f = 0; f < 2; f++) out.push(peaks(acc[f], nR, diag, f, 14));
+    for (f = 0; f < 2; f++) out.push(peaks(acc[f], nR, diag, f, 20));
     return out;
   }
 
@@ -113,7 +125,7 @@
     for (var k = 0; k < cand.length && res.length < maxN; k++) {
       var tt = (cand[k] / nR) | 0, rr = cand[k] % nR, ok = true;
       for (var q = 0; q < res.length; q++) {
-        if (Math.abs(res[q].t - tt) < 8 && Math.abs(res[q].r - rr) < 6) { ok = false; break; }
+        if (Math.abs(res[q].t - tt) < 4 / TH_STEP && Math.abs(res[q].r - rr) < 6) { ok = false; break; }
       }
       if (!ok) continue;
       var th = (fam * 90 - TH_RANGE + tt * TH_STEP) * D2R;
@@ -130,7 +142,8 @@
   function dist(a, b) { var dx = a.x - b.x, dy = a.y - b.y; return Math.sqrt(dx * dx + dy * dy); }
 
   // fraction of perimeter samples with strong, correctly-oriented gradient
-  function sideSupport(E, w, h, a, b) {
+  function sideSupport(E, w, h, a, b, tf, cmin) {
+    tf = tf || 0.7; cmin = cmin || 0.85;
     var len = dist(a, b), n = Math.max(8, Math.round(len / 2)), hit = 0, tot = 0;
     var ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, nx = -uy, ny = ux;
     for (var k = 1; k < n; k++) {
@@ -140,13 +153,35 @@
         var x = Math.round(px + nx * o), y = Math.round(py + ny * o);
         if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
         var i = y * w + x, m = E.mag[i];
-        if (m < E.thr * 0.7) continue;
+        if (m < E.thr * tf) continue;
         var cosv = Math.abs(E.gx[i] * nx + E.gy[i] * ny) / (m + 1e-6);
-        if (cosv > 0.85) { best = 1; break; }
+        if (cosv > cmin) { best = 1; break; }
       }
       hit += best;
     }
     return tot ? hit / tot : 0;
+  }
+
+  function fastSupport(map, w, h, a, b, step) {
+    var len = dist(a, b), n = Math.max(8, Math.round(len / (step || 2))), hit = 0, tot = 0;
+    var dx = (b.x - a.x) / n, dy = (b.y - a.y) / n, x = a.x + 0.5, y = a.y + 0.5;
+    for (var k = 1; k < n; k++) {
+      x += dx; y += dy;
+      var xi = x | 0, yi = y | 0;
+      tot++;
+      if (xi >= 0 && yi >= 0 && xi < w && yi < h) hit += map[yi * w + xi];
+    }
+    return hit / tot;
+  }
+
+  // mean intensity along a segment shifted by (ox,oy)
+  function stripMean(P, A, B, ox, oy) {
+    var n = Math.max(6, Math.round(dist(A, B) / 3)), sum = 0, cnt = 0, w = P.w, h = P.h;
+    for (var k = 1; k < n; k++) {
+      var f = k / n, x = (A.x + (B.x - A.x) * f + ox) | 0, y = (A.y + (B.y - A.y) * f + oy) | 0;
+      if (x >= 0 && y >= 0 && x < w && y < h) { sum += P.g[y * w + x]; cnt++; }
+    }
+    return cnt ? sum / cnt : 0;
   }
 
   function evalQuad(E, P, V1, V2, H1, H2) {
@@ -162,38 +197,66 @@
     var af = area / (w * h);
     if (af < 0.12 || af > 0.97) return null;
     if (cw < w * 0.3) return null;
-    var s = [sideSupport(E, w, h, tl, tr), sideSupport(E, w, h, tr, br), sideSupport(E, w, h, br, bl), sideSupport(E, w, h, bl, tl)];
-    var mn = Math.min(s[0], s[1], s[2], s[3]), mean = (s[0] + s[1] + s[2] + s[3]) / 4;
-    var aspPen = Math.abs(asp - ASPECT) / ASPECT;
-    var score = (0.6 * mean + 0.4 * mn) * (1 - Math.min(0.5, aspPen * 1.5));
-    return { pts: pts, score: score, area: af, lines: [H1, V2, H2, V1] };
+    var aspF = 1 - Math.min(0.5, Math.abs(asp - ASPECT) / ASPECT * 1.5);
+    var cheap = (fastSupport(E.eh, w, h, tl, tr, 4) + fastSupport(E.ev, w, h, tr, br, 4) + fastSupport(E.eh, w, h, br, bl, 4) + fastSupport(E.ev, w, h, bl, tl, 4)) * aspF;
+    return { pts: pts, cheap: cheap, aspF: aspF, cw: cw, area: af, lines: [H1, V2, H2, V1] };
   }
 
-  // least-squares refinement of a side line using strong edge pixels near it
-  function refineLine(E, P, a, b) {
-    var w = P.w, h = P.h, len = dist(a, b);
-    var ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, nx = -uy, ny = ux;
-    var n = Math.round(len), sx = 0, sy = 0, sxx = 0, sxy = 0, sw = 0, cnt = 0;
-    for (var k = Math.round(n * 0.08); k < n * 0.92; k++) {
-      var px = a.x + ux * k, py = a.y + uy * k, bestO = 0, bestM = 0;
-      for (var o = -3; o <= 3; o++) {
-        var x = Math.round(px + nx * o), y = Math.round(py + ny * o);
-        if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
-        var i = y * w + x, m = E.mag[i];
-        var cosv = Math.abs(E.gx[i] * nx + E.gy[i] * ny) / (m + 1e-6);
-        if (cosv > 0.85 && m > bestM) { bestM = m; bestO = o; }
-      }
-      if (bestM < E.thr * 0.7) continue;
-      // sub-pixel: parabola over neighbours along normal
-      var t = k, d = bestO;  // coordinates in (along, across) frame
-      sx += t * bestM; sy += d * bestM; sxx += t * t * bestM; sxy += t * d * bestM; sw += bestM; cnt++;
+  // full score: perimeter support minus parallel outside support, plus inside/outside contrast
+  function fullScore(E, P, q) {
+    var w = P.w, h = P.h, s = [], con = 0, P4 = q.pts, off = Math.max(4, q.cw * 0.035);
+    for (var i = 0; i < 4; i++) {
+      var A = P4[i], B = P4[(i + 1) % 4], map = (i & 1) ? E.ev : E.eh, L = dist(A, B);
+      var ox = (B.y - A.y) / L * off, oy = -(B.x - A.x) / L * off;   // outward offset
+      var on = fastSupport(map, w, h, A, B);
+      var out = fastSupport(map, w, h, { x: A.x + ox, y: A.y + oy }, { x: B.x + ox, y: B.y + oy });
+      s.push(Math.max(0, on - 0.6 * out));   // a silhouette edge has a quieter outside
+      // a silhouette separates two differently coloured regions (texture lines do not)
+      var ux = ox / off, uy = oy / off, inn = stripMean(P, A, B, -ux * 4, -uy * 4), ext = stripMean(P, A, B, ux * 4, uy * 4);
+      con += Math.min(1, Math.abs(inn - ext) / 25) / 4;
     }
-    if (cnt < n * 0.25) return null;
-    var den = sw * sxx - sx * sx;
-    if (Math.abs(den) < 1e-6) return null;
-    var slope = (sw * sxy - sx * sy) / den, icpt = (sy - slope * sx) / sw;
-    if (Math.abs(slope) > 0.1 || Math.abs(icpt) > 3.5) return null;
-    // two points on refined line
+    var mn = Math.min(s[0], s[1], s[2], s[3]), mean = (s[0] + s[1] + s[2] + s[3]) / 4;
+    q.score = (0.6 * mean + 0.4 * mn) * q.aspF * (0.7 + 0.3 * con);
+  }
+
+  // robust least-squares refinement of a side line: per sample along the side take the
+  // OUTERMOST oriented gradient local-max (card silhouette, not inner frame lines)
+  function refineLine(E, P, a, b, tf) {
+    tf = tf || 0.45;
+    var w = P.w, h = P.h, len = dist(a, b), mag = E.mag, thr = E.thr * tf;
+    var ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, nx = -uy, ny = ux;   // n points inward
+    var T = [], D = [], M = [];
+    function mAt(px, py) {
+      var x = Math.round(px), y = Math.round(py);
+      if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) return -1;
+      var i = y * w + x, m = mag[i];
+      return Math.abs(E.gx[i] * nx + E.gy[i] * ny) > 0.9 * m ? m : 0;
+    }
+    for (var k = Math.round(len * 0.1); k < len * 0.9; k++) {
+      var px = a.x + ux * k, py = a.y + uy * k;
+      for (var o = -REF_OUT; o <= 3; o++) {
+        var m0 = mAt(px + nx * o, py + ny * o);
+        if (m0 < thr) continue;
+        var mp = mAt(px + nx * (o - 1), py + ny * (o - 1)), mn = mAt(px + nx * (o + 1), py + ny * (o + 1));
+        if (m0 < mp || m0 < mn) continue;
+        var den = mp - 2 * m0 + mn, off = den < 0 ? 0.5 * (mp - mn) / den : 0;
+        T.push(k); D.push(o + Math.max(-0.5, Math.min(0.5, off))); M.push(m0);
+        break;
+      }
+    }
+    if (T.length < len * 0.3) return null;
+    var slope = 0, icpt = 0;
+    for (var it = 0; it < 3; it++) {
+      var sx = 0, sy = 0, sxx = 0, sxy = 0, sw = 0;
+      for (var j = 0; j < T.length; j++) {
+        if (it && Math.abs(D[j] - (slope * T[j] + icpt)) > (it === 1 ? 2 : 1)) continue;
+        var wt = M[j]; sx += T[j] * wt; sy += D[j] * wt; sxx += T[j] * T[j] * wt; sxy += T[j] * D[j] * wt; sw += wt;
+      }
+      var dd = sw * sxx - sx * sx;
+      if (!sw || Math.abs(dd) < 1e-6) return null;
+      slope = (sw * sxy - sx * sy) / dd; icpt = (sy - slope * sx) / sw;
+    }
+    if (Math.abs(slope) > 0.06 || Math.abs(icpt + slope * len / 2) > REF_OUT) return null;
     var p0 = { x: a.x + nx * icpt, y: a.y + ny * icpt };
     var p1 = { x: a.x + ux * len + nx * (icpt + slope * len), y: a.y + uy * len + ny * (icpt + slope * len) };
     var dx = p1.x - p0.x, dy = p1.y - p0.y, L = Math.sqrt(dx * dx + dy * dy);
@@ -201,8 +264,9 @@
     return { c: c, s: s, rho: c * p0.x + s * p0.y };
   }
 
-  function findCard(canvas) {
-    var P = prep(canvas), E = sobel(P), L = hough(P, E);
+  function findCard(canvas, opts) {
+    opts = opts || {}; REF_OUT = opts.refOut || 5;
+    var T0 = performance.now(), P = prep(canvas), T1 = performance.now(), E = sobel(P), T2 = performance.now(), L = hough(P, E), T3 = performance.now(); DBG = []; window.CardFind._dbg = DBG; DBG.t = [T1 - T0, T2 - T1, T3 - T2];
     var V = L[0], H = L[1], best = null, cands = [];
     for (var a = 0; a < V.length; a++) for (var b = 0; b < V.length; b++) {
       if (a === b) continue;
@@ -219,9 +283,13 @@
         if (q) cands.push(q);
       }
     }
+    DBG.t.push(performance.now() - T3, cands.length);
     if (!cands.length) return null;
+    cands.sort(function (x, y) { return y.cheap - x.cheap; });
+    if (cands.length > 300) cands.length = 300;
+    for (var i = 0; i < cands.length; i++) fullScore(E, P, cands[i]);
     var top = 0;
-    for (var i = 0; i < cands.length; i++) if (cands[i].score > top) top = cands[i].score;
+    for (i = 0; i < cands.length; i++) if (cands[i].score > top) top = cands[i].score;
     // among near-best candidates prefer the largest (outer card edge vs inner border edge)
     for (i = 0; i < cands.length; i++) {
       var q2 = cands[i];
@@ -230,11 +298,37 @@
     if (best.score < 0.3) return null;
     // refine each side, recompute corners
     var pts = best.pts, sides = [];
-    for (i = 0; i < 4; i++) sides.push(refineLine(E, P, pts[i], pts[(i + 1) % 4]) || null);
+    DBG.raw = best.pts.map(function (p) { return { x: (p.x + 0.5) / P.scale, y: (p.y + 0.5) / P.scale }; });
+    // outward search: weak outer card edge (e.g. silver border on white) beyond the chosen line
+    var cwd = (dist(pts[0], pts[1]) + dist(pts[3], pts[2])) / 2, maxOff = Math.round(cwd * 0.065);
+    for (i = 0; i < 4; i++) {
+      var A = pts[i], B = pts[(i + 1) % 4], len = dist(A, B);
+      var ux = (B.x - A.x) / len, uy = (B.y - A.y) / len, onx = uy, ony = -ux;
+      var a1 = { x: A.x + ux * len * 0.12, y: A.y + uy * len * 0.12 }, b1 = { x: B.x - ux * len * 0.12, y: B.y - uy * len * 0.12 };
+      var sup = [], pick = 0;
+      for (var o = 0; o <= 3 * maxOff + 1; o++)
+        sup.push(sideSupport(E, P.w, P.h, { x: a1.x + onx * o, y: a1.y + ony * o }, { x: b1.x + onx * o, y: b1.y + ony * o }, 0.3, 0.96));
+      for (o = 3; o <= maxOff; o++) if (sup[o] >= 0.65 && sup[o] >= sup[o - 1] && sup[o] >= sup[o + 1]) {
+        // must be the outermost structure: region beyond it is quiet (rejects wood grain, clutter)
+        var quiet = true;
+        for (var o2 = o + 3; o2 <= o + 2 * maxOff; o2++) if (sup[o2] > 0.2) { quiet = false; break; }
+        // the band between the two lines (card border) must differ from what lies beyond (background)
+        if (quiet && !opts.noExpand) {
+          var band = stripMean(P, a1, b1, onx * o * 0.5, ony * o * 0.5), beyond = stripMean(P, a1, b1, onx * (o + 3), ony * (o + 3));
+          if (Math.abs(band - beyond) > 12) pick = o;
+        }
+      }
+      DBG.push(pick);
+      var tf = pick ? 0.3 : 0.45;
+      var A2 = { x: A.x + onx * pick, y: A.y + ony * pick }, B2 = { x: B.x + onx * pick, y: B.y + ony * pick };
+      var rl = refineLine(E, P, A2, B2, tf);
+      if (!rl && pick) { var ddx = B2.x - A2.x, ddy = B2.y - A2.y, LL = Math.sqrt(ddx * ddx + ddy * ddy); rl = { c: -ddy / LL, s: ddx / LL }; rl.rho = rl.c * A2.x + rl.s * A2.y; }
+      sides.push(rl);
+    }
     var orig = best.lines, Ls = [];
     for (i = 0; i < 4; i++) Ls.push(sides[i] || orig[i]);
     var rp = [inter(Ls[3], Ls[0]), inter(Ls[0], Ls[1]), inter(Ls[1], Ls[2]), inter(Ls[2], Ls[3])];
-    for (i = 0; i < 4; i++) if (!rp[i] || dist(rp[i], pts[i]) > 5) rp[i] = pts[i];
+    for (i = 0; i < 4; i++) if (!rp[i] || dist(rp[i], pts[i]) > maxOff * 1.6 + 5) rp[i] = pts[i];
     var inv = 1 / P.scale, corners = [];
     // corners are continuous canvas coords (pixel i spans [i,i+1))
     for (i = 0; i < 4; i++) corners.push({ x: (rp[i].x + 0.5) * inv, y: (rp[i].y + 0.5) * inv });

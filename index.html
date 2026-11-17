@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f1115">
-<meta name="db-version" content="1">
+<meta name="db-version" content="3">
 <title>Scanner Carte Pokémon</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
@@ -116,7 +116,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v5</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v7</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -243,7 +243,8 @@ td.r,th.r{text-align:right}
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-<script src="cardfind.js?v=5"></script>
+<script src="cardfind.js?v=6"></script>
+<script src="fp2.js?v=6"></script>
 <script>
 "use strict";
 /* ====================== CONFIG & STATE ====================== */
@@ -294,7 +295,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const eur = v => (v==null||isNaN(v)) ? "—" : new Intl.NumberFormat("it-IT",{style:"currency",currency:"EUR"}).format(v);
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove("show"),2200); }
-function img(card, q="low"){ return card.image ? `${card.image}/${q}.webp` : "data:image/svg+xml;utf8,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 63 88"><rect width="63" height="88" fill="#222"/><text x="31" y="48" font-size="10" fill="#666" text-anchor="middle">?</text></svg>'); }
+function img(card, q="low"){ if(card.imgFull) return card.imgFull; return card.image ? `${card.image}/${q}.webp` : "data:image/svg+xml;utf8,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 63 88"><rect width="63" height="88" fill="#222"/><text x="31" y="48" font-size="10" fill="#666" text-anchor="middle">?</text></svg>'); }
 
 /* ====================== API (TCGdex) ====================== */
 const mem = {};
@@ -414,7 +415,7 @@ let noNumTicks=0, lastNameWord=null, lastLang=null; const nameCache={};
 $("#btnCam").onclick = async ()=>{
   if(!liveCamOK){ $("#fileCam").click(); return; }
   try{
-    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:3840},height:{ideal:2160},frameRate:{ideal:30}},audio:false});
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080},frameRate:{ideal:30}},audio:false});
   }catch(e){ toast("Permesso fotocamera negato: usa 'Carica foto'"); return; }
   const v=$("#video"); v.srcObject=stream; v.style.display="block";
   try{ const tr=stream.getVideoTracks()[0], caps=tr.getCapabilities?tr.getCapabilities():{};
@@ -425,7 +426,7 @@ $("#btnCam").onclick = async ()=>{
   $("#frame").classList.remove("hit"); $("#liveRes").style.display="none";
   $("#btnCam").style.display="none"; $("#btnSnap").style.display="";
   $("#results").innerHTML=""; lastHitId=null; prevTopId=null; noNumTicks=0; lastNameWord=null;
-  scanning=true;
+  scanning=true; lastActivity=Date.now(); hitThumb=null;
   hint("Preparazione scanner… (solo la prima volta può volerci qualche secondo)");
   try{ await Promise.all([getWorker(), getNumWorker()]); }
   catch(e){ hint("Errore nel caricare lo scanner. Controlla la connessione."); return; }
@@ -461,7 +462,7 @@ function showDiag(card){
    <div class="grow small">Nome letto: <b>${esc(d.nameText||"—")}</b><br>Numero letto: <b>${esc(d.seen||"—")}</b>
    ${d.cands.map((c,i)=>`<div style="margin-top:4px">${i+1}. ${esc(c.name||c.id)} <span class="muted">${esc(c.id)} · img ${c._vis!=null?Math.round(c._vis):"-"} · verifica ${c._ver!=null?c._ver.toFixed(2):"-"} · num ${c._n} · tot ${Math.round(c._score)}</span></div>`).join("")}</div></div>`;
 }
-function visCount(){ let n=0; for(const k in visDB){ if(visDB[k]._n) n+=visDB[k]._n; } return n||"in caricamento"; }
+function visCount(){ let n=0; const src=window.FP2?fp2DB:visDB; for(const k in src){ if(src[k]._n) n+=src[k]._n; } return n?n+(window.FP2?" (v2)":""):"in caricamento"; }
 function grabFrame(){
   const v=$("#video"), s=Math.min(1, 1600/Math.max(v.videoWidth,v.videoHeight));
   const c=document.createElement("canvas"); c.width=Math.round(v.videoWidth*s); c.height=Math.round(v.videoHeight*s);
@@ -470,7 +471,7 @@ function grabFrame(){
 function locateFromVideo(){
   try{
     const fr=grabFrame(), f=CardFind.findCard(fr);
-    if(f && f.score>=0.3){ const w=CardFind.warp(fr,f.corners,630,880); w._how="ritaglio automatico"; return w; }
+    if(f && f.score>=0.3){ const w=CardFind.warp(fr,f.corners,900,1257); w._how="ritaglio automatico"; return w; }
   }catch(e){ console.warn(e); }
   return null;
 }
@@ -553,8 +554,65 @@ function fpDist(a, bin, off){
   let c=0; for(let i=24;i<60;i++){ const d=a[i]-bin[off+i]; c+= d<0?-d:d; }
   return 3*h + c/8;
 }
-// Top-k most similar cards. Several crops make it tolerant to how the card sits in the frame.
+// Supplementary cards (missing in TCGdex or without picture there): data/extra-en.json + data/fp2-extra-en.bin
+let extraP=null, extraMap={};
+function loadExtra(){
+  if(!extraP){
+    extraP=(async()=>{
+      const v=(document.querySelector('meta[name="db-version"]')||{}).content||"1";
+      const [recs, bin]=await Promise.all([cachedJSON(`data/extra-en.json?v=${v}`,14), cachedBinary(`data/fp2-extra-en.bin?v=${v}`)]);
+      recs.forEach(r=>extraMap[r.id]=r);
+      return {recs, bin};
+    })();
+    extraP.catch(()=>{ extraP=null; });
+  }
+  return extraP;
+}
+function extraToCard(r){
+  const cm=r.cardmarket;
+  return {id:r.id, name:r.name, localId:r.number, rarity:r.rarity, imgFull:r.image, image:null,
+    set:{id:r.setId, name:r.setName, cardCount:{official:r.printedTotal}}, variants:{normal:true},
+    pricing: cm ? {cardmarket:{updated:cm.updated||new Date().toISOString(), unit:"EUR", trend:cm.trend, avg30:cm.avg30, avg7:cm.avg7, avg1:cm.avg1, low:cm.low, avg:cm.avg, "trend-holo":cm.reverseTrend, url:cm.url}} : null};
+}
+// Any card id: TCGdex, or supplementary "ptcg:…", or TCGdex card whose picture comes from elsewhere
+async function getCardAny(id, lang="en"){
+  if(String(id).startsWith("ptcg:")){ await loadExtra().catch(()=>{}); if(extraMap[id]) return extraToCard(extraMap[id]); throw new Error("not found"); }
+  const c=await getCard(id, lang);
+  if(!c.image){ await loadExtra().catch(()=>{}); if(extraMap[id]) return Object.assign({}, c, {imgFull:extraMap[id].image}); }
+  return c;
+}
+const fp2DB={};
+function loadFp2(lang){
+  if(!fp2DB[lang]){
+    fp2DB[lang]=(async()=>{
+      const v=(document.querySelector('meta[name="db-version"]')||{}).content||"1";
+      const [bin, ids]=await Promise.all([cachedBinary(`data/fp2-${lang}.bin?v=${v}`), cachedJSON(`data/ids-${lang}.json?v=${v}`, 14)]);
+      if(bin.length!==ids.length*FP2.RECORD_BYTES) throw new Error("fp2 size mismatch");
+      fp2DB[lang]._n=ids.length;
+      return {bin, ids};
+    })();
+    fp2DB[lang].catch(()=>delete fp2DB[lang]);
+  }
+  return fp2DB[lang];
+}
+// Top-k most similar cards (fp2: tolerant to misalignment, glare and lighting)
 async function visualMatch(card, langs, k=30){
+  if(window.FP2){
+    try{
+      const fp=FP2.fingerprint(card), out=[];
+      for(const lang of langs){
+        let db; try{ db=await loadFp2(lang); }catch(e){ continue; }
+        FP2.search(fp, db.bin, k, 120).forEach(r=>out.push({id:db.ids[r.index], lang, dist:r.distance}));
+      }
+      if(langs.includes("en")){
+        try{ const ex=await loadExtra(); FP2.search(fp, ex.bin, 10, 60).forEach(r=>{ const rec=ex.recs[r.index]; out.push({id:rec.id, lang:"en", dist:r.distance, extra:rec}); }); }catch(e){}
+      }
+      if(out.length){ out.sort((a,b)=>a.dist-b.dist); out._fp2=true; return out.slice(0,k); }
+    }catch(e){ console.warn("fp2",e); }
+  }
+  return visualMatchV1(card, langs, k);
+}
+async function visualMatchV1(card, langs, k=30){
   const fps=[]; const W=card.width,H=card.height;
   for(const z of [1, 0.94, 0.88]){ const w=W*z, h=H*z; fps.push(fingerprint(card,(W-w)/2,(H-h)/2,w,h)); }
   const out=[];
@@ -669,14 +727,37 @@ function numberScore(c, strict, loose){
 }
 
 // One recognition pass on a card image. Returns {best, cands, sure, how, word, lang, seen}.
+async function quickVisual(card, vis){
+  if(!vis || !vis.length) return null;
+  const meta={en:setMeta(await getSets("en").catch(()=>[])), ja:setMeta(await getSets("ja").catch(()=>[]))};
+  const ix={en: await getNameIndex("en").catch(()=>null), ja: vis.slice(0,6).some(v=>v.lang==="ja") ? await getNameIndex("ja").catch(()=>null) : null};
+  const list=[];
+  vis.slice(0,6).forEach(v=>{
+    if(v.extra){ const r=v.extra; list.push({id:r.id, lang:"en", name:r.name, image:null, imgFull:r.image, localId:r.number, setId:r.setId, setName:r.setName, printed:r.printedTotal, _order:9999, _vis:v.dist, _n:0, _inName:false, _score:0}); return; }
+    const m=meta[v.lang][setOf(v.id)], ref=ix[v.lang]&&ix[v.lang].byId[v.id]; if(!m||!ref) return;
+    list.push({id:v.id, lang:v.lang==="ja"?"ja":defaultLang(), name:ref.name, image:ref.image, localId:ref.localId, setId:setOf(v.id), setName:m.name, printed:m.tot, _order:m.i, _vis:v.dist, _n:0, _inName:false, _score:0});
+  });
+  await verifyTop(card, list, 6);
+  list.sort((a,b)=>(b._ver??-9)-(a._ver??-9));
+  const t=list[0], s2=list[1];
+  if(!t || t._ver==null || t._ver<0.75) return null;
+  if(s2 && s2._ver!=null && t._ver-s2._ver<0.12) return null;               // identical art (reprint / other language): read text too
+  if(list.slice(1).some(c=>(c.lang==="ja")!==(t.lang==="ja") && c._ver!=null && t._ver-c._ver<0.2)) return null;
+  lastDiag={card, cands:list.slice(0,4), seen:"(non necessario)", nameText:"(non necessario)", lang:t.lang, detected:null};
+  return {lang:t.lang, seen:"", word:null, best:t, cands:list, sure:true, how:"immagine verificata"};
+}
 async function analyzeCard(card){
+  const visLangs0 = state.settings.cardLang==="ja" ? ["ja"] : state.settings.cardLang==="auto" ? ["en","ja"] : ["en"];
+  const vis0 = await visualMatch(card, visLangs0).catch(()=>[]);
+  const quick = await quickVisual(card, vis0).catch(()=>null);
+  if(quick) return quick;
   await Promise.all([getWorker(), getNumWorker()]);
   const W=card.width, H=card.height;
   const namePromise = worker.recognize(prep(card,0,0,W,Math.round(H*0.16),Math.min(1.5,1400/W)));
   const langPromise = state.settings.cardLang!=="auto" ? Promise.resolve(null)
     : namePromise.then(()=>worker.recognize(prep(card,0,Math.round(H*0.5),W,Math.round(H*0.42),Math.min(1.2,1200/W))));
   const visLangs = state.settings.cardLang==="ja" ? ["ja"] : state.settings.cardLang==="auto" ? ["en","ja"] : ["en"];
-  const visPromise = visualMatch(card, visLangs).catch(()=>[]);
+  const visPromise = Promise.resolve(vis0);
   const numText = await readNumber(card);
   const top=(await namePromise).data, nameText=top.text;
   // the card name is the biggest text at the top ("Evolves from …" is small): rank words by height
@@ -697,6 +778,7 @@ async function analyzeCard(card){
   nc.list.forEach(c=>{ add(c)._inName=true; });
   const vbest = vis.length ? vis[0].dist : null;
   vis.forEach(v=>{
+    if(v.extra){ const r=v.extra; const c=add({id:r.id, lang:"en", name:r.name, imgFull:r.image, localId:r.number, setId:r.setId, setName:r.setName, printed:r.printedTotal, _order:9999}); c._vis=v.dist; return; }
     const m=meta[v.lang][setOf(v.id)]; if(!m) return;
     const c=add({id:v.id, lang: v.lang==="ja"?"ja":(lang==="ja"?"en":lang), setId:setOf(v.id), setName:m.name, printed:m.tot, _order:m.i,
                  localId:v.id.slice(v.id.lastIndexOf("-")+1)});
@@ -711,7 +793,7 @@ async function analyzeCard(card){
     c._n=numberScore(c,strict,loose);
     c._s=c.name?nameScore(c.name, nameWords||nameText):0;
     // visual: 0..60 points, relative to the best match in this frame
-    const vs = c._vis==null ? 0 : Math.max(0, 60 - (c._vis - vbest)*1.5);
+    const vs = c._vis==null ? 0 : (vis._fp2 ? Math.max(0, 60 - (c._vis - vbest)/Math.max(vbest,400)*240) : Math.max(0, 60 - (c._vis - vbest)*1.5));
     // same artwork exists in Japanese and English: the detected language decides
     const fam = c.lang==="ja" ? "ja" : "eu";
     const famBonus = detected ? ((detected==="ja") === (fam==="ja") ? 15 : 0) : 0;
@@ -729,8 +811,11 @@ async function analyzeCard(card){
   const agree = (t._vis!=null && t._vis===vbest ? 1:0) + (t._inName?1:0) + (t._n>=80?1:0) + (t._ver!=null && t._ver>=0.55 ? 1:0);
   // language unclear and a twin with the same art exists in the other language → ask, don't guess
   const twin = !detected && cands.slice(1,4).some(c=>(c.lang==="ja")!==(t.lang==="ja") && c._vis!=null && t._vis!=null && Math.abs(c._vis-t._vis)<25);
-  const sure = !twin && ((agree>=2 && margin>=8) || (t._n>=80 && t._inName) || (t._ver!=null && t._ver>=0.7 && margin>=10));
-  const ok = sure || (agree>=1 && margin>=4) || t._n>=40;
+  const sameArt = second && t._ver!=null && second._ver!=null && Math.abs(t._ver-second._ver)<0.04 && t._n<80;
+  const sure = !twin && !sameArt && ((agree>=2 && margin>=8) || (t._n>=80 && t._inName) || (t._ver!=null && t._ver>=0.7 && margin>=10));
+  const weak = (t._ver==null || t._ver<0.35) && t._n<80 && !t._inName;
+  const ok = !weak && (sure || (agree>=1 && margin>=4) || t._n>=40);
+  if(weak) return {...base, best:null, cands:cands.slice(0,8), sure:false, how:"incerto", word:nc.word, unsure:true};
   if(ok) return {...base, best:t, cands, sure, how, word:nc.word};
   return {...base, best:null, cands: nc.list.length?cands.filter(c=>c._inName):[], sure:false, how:"incerto: "+how, word:nc.word};
 }
@@ -756,14 +841,15 @@ function verSim(a,b){
   let cd=0; for(let i=0;i<a.ch.length;i++) cd+=Math.abs(a.ch[i]-b.ch[i]); cd/=a.ch.length;
   return ncc - cd*6;      // colour differences (gold vs silver/yellow) weigh a lot
 }
-function candImageURL(c){ return c.image ? c.image+"/low.png" : null; }
+function candImageURL(c){ if(c.imgFull) return c.imgFull; if(c.image) return c.image+"/low.png"; const r=extraMap[c.id]; return r ? r.image : null; }
 function getVerDesc(c){
   const u=candImageURL(c); if(!u) return Promise.resolve(null);
   if(!verCache[u]) verCache[u]=fetch(u).then(r=>r.ok?r.blob():Promise.reject()).then(b=>createImageBitmap(b)).then(im=>verDesc(im)).catch(()=>null);
   return verCache[u];
 }
 async function verifyTop(card, cands, k){
-  const top=cands.slice(0,k).filter(c=>c.image);
+  await loadExtra().catch(()=>{});
+  const top=cands.slice(0,k).filter(c=>candImageURL(c));
   if(!top.length) return;
   // query: a few crops so small misalignment doesn't matter
   const W=card.width, H=card.height, qs=[];
@@ -778,13 +864,13 @@ function locateCard(frame){
   if(window.CardFind){
     try{
       const f=CardFind.findCard(frame);
-      if(f && f.score>=0.3){ const w=CardFind.warp(frame,f.corners,630,880); w._how="ritaglio automatico"; return w; }
+      if(f && f.score>=0.3){ const w=CardFind.warp(frame,f.corners,900,1257); w._how="ritaglio automatico"; return w; }
     }catch(e){ console.warn(e); }
   }
   // fallback: centred card-shaped crop
   const W=frame.width, H=frame.height; let cw=W*0.72, ch=cw*88/63; if(ch>H*0.9){ ch=H*0.9; cw=ch*63/88; }
-  const c=document.createElement("canvas"); c.width=630; c.height=880;
-  c.getContext("2d").drawImage(frame,(W-cw)/2,(H-ch)/2,cw,ch,0,0,630,880); c._how="ritaglio centrale"; return c;
+  const c=document.createElement("canvas"); c.width=900; c.height=1257;
+  c.getContext("2d").drawImage(frame,(W-cw)/2,(H-ch)/2,cw,ch,0,0,900,1257); c._how="ritaglio centrale"; return c;
 }
 // Test hook for full camera frames (test-photos.html)
 window.scanFrame = async frame => {
@@ -796,14 +882,24 @@ window.scanOnce = async canvas => {
   return r.best ? {id:r.best.id, name:r.best.name, lang:r.best.lang||r.lang, sure:r.sure, how:r.how} : null;
 };
 
+let lastActivity=Date.now(), hitThumb=null;
+function frameThumb(){
+  const v=$("#video"); const c=document.createElement("canvas"); c.width=24; c.height=32;
+  c.getContext("2d").drawImage(v,0,0,24,32); const d=c.getContext("2d").getImageData(0,0,24,32).data, g=new Uint8Array(24*32);
+  for(let i=0;i<g.length;i++) g[i]=(d[i*4]+d[i*4+1]+d[i*4+2])/3; return g;
+}
+function thumbDiff(a,b){ let s=0; for(let i=0;i<a.length;i++) s+=Math.abs(a[i]-b[i]); return s/a.length; }
 async function scanTick(){
   if(!scanning) return;
+  // same card still in front of the camera after a hit → don't re-analyse (saves battery and heat)
+  if(lastHitId && hitThumb && !busy){ try{ const t=frameThumb(); if(thumbDiff(t,hitThumb)<14){ setTimeout(scanTick,700); return; } }catch(e){} }
   const v=$("#video");
   if(busy || !v.videoWidth || $("#sheet").classList.contains("open") || document.hidden){ setTimeout(scanTick,400); return; }
   busy=true;
   try{
     const card = window.CardFind ? (locateFromVideo() || grabCard()) : grabCard();
     const r = await analyzeCard(card);
+    if(r.best || (r.cands&&r.cands.length)) lastActivity=Date.now();
     showDiag(card);
     if(!scanning) return;
     if(r.best){
@@ -816,11 +912,23 @@ async function scanTick(){
       noNumTicks++; prevTopId=null;
       if(!lastHitId) hint(r.word ? `Ho letto «${r.word}»: ora avvicina il numero in basso` : "Inquadra bene nome (in alto) e numero (in basso)", r.seen);
       if(noNumTicks>=3 && r.cands.length && r.word) showNamePicker(r.word, r.cands);
+      else if(noNumTicks>=3 && r.unsure && r.cands.length) showPicker("Non sono sicuro: è una di queste?", "Tocca la carta uguale alla tua. Se non c'è, avvicina la carta, evita i riflessi o cercala a mano.", r.cands);
     }
   }catch(e){ console.error(e); }
-  finally{ busy=false; if(scanning) setTimeout(scanTick,150); }
+  finally{
+    busy=false;
+    if(scanning){
+      if(Date.now()-lastActivity > 45000){ stopCam(); toast("Scanner in pausa per non scaldare il telefono"); }
+      else setTimeout(scanTick, lastHitId ? 700 : 350);
+    }
+  }
 }
 
+function showPicker(title, sub, list){
+  const key="pick:"+list.map(c=>c.id).join(","); if(key===lastNameWord) return; lastNameWord=key;
+  $("#results").innerHTML=`<div class="card"><h2>${esc(title)}</h2><p class="small muted" style="margin-top:0">${esc(sub)}</p><div class="grid">${list.map(c=>`<div class="tile" data-id="${esc(c.id)}" data-lang="${esc(c.lang||"")}"><img loading="lazy" src="${img(c)}" alt=""><div class="n">${esc(c.name||c.id)}</div><div class="small muted">${esc(c.setName||"")} #${esc(c.localId||"")}</div></div>`).join("")}</div></div>`;
+  document.querySelectorAll("#results .tile").forEach(el=>el.onclick=()=>openCard(el.dataset.id, null, el.dataset.lang||undefined));
+}
 // Name read but not the number: let the user pick the right version by picture.
 function showNamePicker(word, list){
   const key=norm(word); if(key===lastNameWord) return; lastNameWord=key;
@@ -831,8 +939,28 @@ function showNamePicker(word, list){
   if(navigator.vibrate) navigator.vibrate(30);
 }
 
+
+// After a scan the user can always pick the exact edition: every printing of that Pokémon, best guesses first.
+async function showEditions(c, cands){
+  const box=$("#results");
+  const first=(c.name||"").split(/[\s\-&]+/).map(t=>norm(t)).find(k=>k.length>=4 && !NAME_SKIP.has(k));
+  let all=[];
+  try{
+    const ix=await getNameIndex(c.lang==="ja"?"ja":"en");
+    const meta=setMeta(await getSets(c.lang==="ja"?"ja":"en").catch(()=>[]));
+    all=((first && ix.map[first])||[]).map(x=>{ const m=meta[setOf(x.id)]||{}; return {id:x.id,name:x.name,localId:x.localId,image:x.image,setName:m.name,printed:m.tot,lang:c.lang,_order:m.i||0}; });
+  }catch(e){}
+  const seen=new Set([c.id]), list=[];
+  (cands||[]).forEach(x=>{ if(!seen.has(x.id) && (x.name||"").toLowerCase().includes(first||"\u0000")){ seen.add(x.id); list.push(x); } });
+  try{ await loadExtra(); Object.values(extraMap).forEach(r=>{ if(first && r.name.split(/[\s\-&]+/).some(t=>norm(t)===first)){ const ex=all.find(a=>a.id===r.id); if(ex) ex.imgFull=r.image; else all.push({id:r.id,name:r.name,localId:r.number,imgFull:r.image,setName:r.setName,printed:r.printedTotal,lang:"en",_order:9999}); } }); }catch(e){}
+  all.sort((a,b)=>b._order-a._order).forEach(x=>{ if(!seen.has(x.id)){ seen.add(x.id); list.push(x); } });
+  if(!list.length){ box.innerHTML=""; return; }
+  box.innerHTML=`<div class="card"><h2>È un'altra edizione? Sceglila tu</h2><p class="small muted" style="margin-top:0">Tutte le versioni di «${esc(c.name||"")}» (${list.length+1}). Tocca quella uguale alla tua: guarda bordo (gold, rainbow), illustrazione e simbolo dell'espansione.</p>
+    <div class="grid">${list.slice(0,80).map(o=>`<div class="tile" data-id="${esc(o.id)}" data-lang="${esc(o.lang||"")}"><img loading="lazy" src="${img(o)}" alt=""><div class="n">${esc(o.name)}</div><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(o.setName||"")} #${esc(o.localId)}${o.printed?"/"+o.printed:""}</div></div>`).join("")}</div></div>`;
+  box.querySelectorAll(".tile").forEach(el=>el.onclick=()=>openCard(el.dataset.id, null, el.dataset.lang||undefined));
+}
 async function liveHit(c, cands){
-  lastHitId=c.id;
+  lastHitId=c.id; lastActivity=Date.now(); try{ hitThumb=frameThumb(); }catch(e){}
   $("#frame").classList.add("hit"); setTimeout(()=>$("#frame").classList.remove("hit"),900);
   if(navigator.vibrate) navigator.vibrate(60);
   hint("Carta trovata! Tocca per i dettagli — oppure inquadra la prossima");
@@ -841,10 +969,9 @@ async function liveHit(c, cands){
   box.style.display="flex";
   box.onclick=()=>openCard(c.id, null, c.lang);
   // other cards with the same number, in case the guess is wrong
-  $("#results").innerHTML = cands.length ? `<div class="card"><h2>Non è questa versione?</h2><div class="list">${cands.slice(0,12).map(o=>`<div class="item" data-id="${esc(o.id)}"><img src="${img(o)}" alt=""><div><div class="t">${esc(o.name)}</div><div class="small muted">${esc(o.setName||"")} · #${esc(o.localId)}</div></div></div>`).join("")}</div></div>` : "";
-  document.querySelectorAll("#results .item").forEach(el=>el.onclick=()=>openCard(el.dataset.id, null, c.lang));
+  showEditions(c, cands);
   try{
-    const d=await getCard(c.id, c.lang);
+    const d=await getCardAny(c.id, c.lang);
     if(lastHitId===c.id){
       box.querySelector(".p").textContent=eur(pickPrice(cmPrices(d),variantList(d)[0],state.settings.priceField));
       box.querySelector(".badges").innerHTML=badgesHTML(d);
@@ -896,8 +1023,9 @@ async function recognize(canvas){
     // a photo of the card filling the frame: same name+number logic as the live scanner
     setOcr(30,"Lettura nome e numero…");
     const a = await analyzeCard(canvas);
-    if(a.best){ setOcr(100,""); return showResults([a.best, ...a.cands.filter(c=>c.id!==a.best.id)].map((c,i)=>Object.assign(c,{_s:i?0:1})), ""); }
+    if(a.best){ setOcr(100,""); $("#ocrBox").style.display="none"; await showEditions(a.best, a.cands); $("#results").insertAdjacentHTML("afterbegin", `<div class="card"><h2>Carta trovata</h2><div class="item" id="foundItem"><img src="${img(a.best)}" alt=""><div><div class="t">${flag(a.best.lang)} ${esc(a.best.name||"")}</div><div class="small muted">${esc(a.best.setName||"")} #${esc(a.best.localId||"")}</div></div><div class="p">›</div></div></div>`); $("#foundItem").onclick=()=>openCard(a.best.id,null,a.best.lang); return openCard(a.best.id,null,a.best.lang); }
     if(a.cands.length && a.word){ $("#ocrBox").style.display="none"; return showNamePicker(a.word, a.cands); }
+    if(a.unsure && a.cands.length){ $("#ocrBox").style.display="none"; return showPicker("Non sono sicuro: è una di queste?","Tocca la carta uguale alla tua, oppure rifai la foto più da vicino e senza riflessi.", a.cands); }
     const w = await getWorker();
     const W=canvas.width, H=canvas.height;
     // pass 1: full card text
@@ -1049,7 +1177,7 @@ async function showResults(cands, ocrText){
     el.onclick=()=>openCard(c.id, null, c.lang);
     list.appendChild(el);
     // lazy price for first results
-    if(i<15) getCard(c.id, c.lang).then(d=>{
+    if(i<15) getCardAny(c.id, c.lang).then(d=>{
       const v=pickPrice(cmPrices(d),variantList(d)[0],state.settings.priceField);
       el.querySelector(".p").textContent=eur(v);
       if(!c.setName && d.set){ el.querySelector(".small").textContent=`${d.set.name} · #${d.localId}`; }
@@ -1090,7 +1218,7 @@ async function openCard(id, entry, langIn){
   openSheet(`<div style="padding:30px;text-align:center"><span class="spin"></span></div>`);
   let lang = (entry && entry.lang) || langIn || defaultLang();
   let card;
-  try{ card = Object.assign({}, await getCard(id, lang)); }catch(e){ return openSheet(`<p class="bad">Impossibile caricare la carta.</p>`); }
+  try{ card = Object.assign({}, await getCardAny(id, lang)); }catch(e){ return openSheet(`<p class="bad">Impossibile caricare la carta.</p>`); }
   const cm = cmPrices(card);
   const vlist = variantList(card);
   if(hasHoloPrice(cm) && !vlist.includes("reverse") && vlist.includes("normal")) vlist.splice(1,0,"reverse");
@@ -1176,7 +1304,7 @@ async function openCard(id, entry, langIn){
       }
       const a=state.albums.find(a=>a.id===$("#addAlbum").value)||state.albums[0];
       a.cards.push({uid:uid(),cardId:card.id,name:card.name,setId:card.set.id,setName:card.set.name,localId:card.localId,
-        printed:card.set.cardCount?.official,image:card.image,rarity:card.rarity||"",variant,lang,v2:1,condition:graded?"NM":cond,graded,qty,buyPrice:bp,cm,added:Date.now(),updated:Date.now()});
+        printed:card.set.cardCount?.official,image:card.image,imgFull:card.imgFull||null,rarity:card.rarity||"",variant,lang,v2:1,condition:graded?"NM":cond,graded,qty,buyPrice:bp,cm,added:Date.now(),updated:Date.now()});
       save(); closeSheet(); toast(`Aggiunta a "${a.name}"`);
     };
     if(entry) $("#btnDel").onclick=()=>{
@@ -1274,7 +1402,7 @@ async function refreshPrices(cards){
   for(let i=0;i<ids.length;i+=6){
     await Promise.all(ids.slice(i,i+6).map(async id=>{
       delete mem[`${API}/en/cards/${encodeURIComponent(id)}`];
-      try{ const d=await getCard(id, dbLang(cards.find(c=>c.cardId===id).lang)); cards.filter(c=>c.cardId===id).forEach(c=>{c.cm=cmPrices(d); c.updated=Date.now();}); }catch(e){}
+      try{ const d=await getCardAny(id, dbLang(cards.find(c=>c.cardId===id).lang)); cards.filter(c=>c.cardId===id).forEach(c=>{c.cm=cmPrices(d); c.updated=Date.now();}); }catch(e){}
       done++;
     }));
     toast(`Aggiornamento ${done}/${ids.length}…`);
@@ -1346,7 +1474,7 @@ document.querySelectorAll("nav.tabs button").forEach(b=>b.onclick=()=>show(b.dat
 renderHeader();
 getSets().catch(()=>{});
 if(diagOn) $("#diag").style.display="";
-setTimeout(()=>{ getNameIndex("en").catch(()=>{}); loadVisDB("en").catch(()=>{}); if(state.settings.cardLang==="auto"||state.settings.cardLang==="ja") loadVisDB("ja").catch(()=>{}); }, 1500);   // download the name list once in the background
+setTimeout(()=>{ getNameIndex("en").catch(()=>{}); (window.FP2?loadFp2:loadVisDB)("en").catch(()=>{}); loadExtra().catch(()=>{}); if(state.settings.cardLang==="auto"||state.settings.cardLang==="ja") (window.FP2?loadFp2:loadVisDB)("ja").catch(()=>{}); }, 1500);   // download the name list once in the background
 if("serviceWorker" in navigator && window.top===window && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>

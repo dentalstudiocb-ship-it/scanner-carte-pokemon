@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test foto reali</title>
+<style>
+  :root { --bg:#fff; --fg:#111; --mut:#666; --line:#ddd; --ok:#0a7d32; --ko:#c62828; --warn:#b26a00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121212; --fg:#eee; --mut:#999; --line:#333; --ok:#4cd07d; --ko:#ff6b6b; --warn:#ffb74d; } }
+  body { background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; margin:16px; }
+  h1 { font-size:18px; margin:0 0 8px; }
+  #status { color:var(--mut); margin:6px 0 12px; }
+  #summary table, #results { border-collapse:collapse; }
+  #summary td, #summary th, #results td, #results th { border-bottom:1px solid var(--line); padding:4px 8px; text-align:left; vertical-align:middle; }
+  #results img { width:60px; height:80px; object-fit:cover; display:block; }
+  .PASS { color:var(--ok); font-weight:600; } .FAIL { color:var(--ko); font-weight:600; } .sureWrong { color:var(--warn); font-weight:600; }
+  .wrap { overflow-x:auto; }
+  iframe { position:absolute; left:-9999px; width:400px; height:800px; border:0; }
+</style>
+</head>
+<body>
+<h1>Test foto reali (camera frame 1080×1440)</h1>
+<div id="status">Caricamento…</div>
+<div id="summary"></div>
+<div class="wrap"><table id="results">
+  <thead><tr><th>#</th><th>foto</th><th>diff.</th><th>atteso</th><th>ottenuto</th><th>sure</th><th>how</th><th>ms</th><th>esito</th></tr></thead>
+  <tbody></tbody>
+</table></div>
+<iframe id="app" src="index.html"></iframe>
+<script>
+(async function () {
+  const $ = (s) => document.querySelector(s);
+  const status = (t) => { $('#status').textContent = t; };
+  const qs = new URLSearchParams(location.search);
+  const only = (qs.get('only') || '').split(',').map(s => s.trim()).filter(Boolean);
+  const limit = parseInt(qs.get('limit') || '0', 10);
+  const diffs = (qs.get('difficulty') || '').split(',').map(s => s.trim()).filter(Boolean);
+  window.__results = [];
+  window.__done = false;
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  let manifest;
+  try {
+    const r = await fetch('tests/photos/manifest.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    manifest = await r.json();
+  } catch (e) {
+    status('Errore caricando tests/photos/manifest.json: ' + e.message);
+    window.__error = 'manifest'; window.__done = true; return;
+  }
+  let list = manifest.filter(m => (!only.length || only.includes(m.id)) && (!diffs.length || diffs.includes(m.difficulty)));
+  if (limit > 0) list = list.slice(0, limit);
+  window.__list = list;
+  status(`${list.length} foto selezionate (manifest: ${manifest.length}). In attesa di scanFrame…`);
+
+  // wait for the app hook (up to 60 s)
+  const frame = $('#app');
+  let scanFrame = null;
+  const t0 = performance.now();
+  while (performance.now() - t0 < 60000) {
+    try { scanFrame = frame.contentWindow && frame.contentWindow.scanFrame; } catch (e) {}
+    if (typeof scanFrame === 'function') break;
+    scanFrame = null;
+    await sleep(250);
+  }
+  if (!scanFrame) {
+    status(`scanFrame non disponibile (${list.length} foto nel manifest selezionato).`);
+    window.__error = 'scanFrame non disponibile'; window.__done = true; return;
+  }
+
+  const loadImg = (src) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('img load ' + src)); im.src = src; });
+  const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout ' + ms + 'ms')), ms))]);
+  const tbody = $('#results tbody');
+  const stats = {}; let sureWrong = 0;
+
+  function renderSummary() {
+    const rows = ['easy', 'normal', 'hard', 'tutte'].map(d => {
+      const s = d === 'tutte'
+        ? Object.values(stats).reduce((a, b) => ({ n: a.n + b.n, ok: a.ok + b.ok }), { n: 0, ok: 0 })
+        : (stats[d] || { n: 0, ok: 0 });
+      const pct = s.n ? (100 * s.ok / s.n).toFixed(1) + '%' : '–';
+      return `<tr><th>${d}</th><td>${s.ok}/${s.n}</td><td>${pct}</td></tr>`;
+    }).join('');
+    $('#summary').innerHTML = `<table><tr><th>difficoltà</th><th>pass</th><th>accuratezza</th></tr>${rows}</table>
+      <p>Sbagliate ma "sure": <span class="sureWrong">${sureWrong}</span></p>`;
+  }
+  renderSummary();
+
+  for (let i = 0; i < list.length; i++) {
+    const m = list[i];
+    status(`Scansione ${i + 1}/${list.length}: ${m.file}`);
+    const src = 'tests/photos/' + m.file;
+    let got = null, err = null, ms = 0;
+    try {
+      const img = await loadImg(src);
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      const t = performance.now();
+      got = await withTimeout(Promise.resolve(scanFrame(c)), 25000);
+      ms = Math.round(performance.now() - t);
+    } catch (e) { err = e.message || String(e); }
+    const pass = !!(got && got.id === m.id);
+    const sure = !!(got && got.sure);
+    if (!pass && got && sure) sureWrong++;
+    const d = m.difficulty || '?';
+    stats[d] = stats[d] || { n: 0, ok: 0 }; stats[d].n++; if (pass) stats[d].ok++;
+    const res = { file: m.file, id: m.id, lang: m.lang, difficulty: d, got: got ? { id: got.id, name: got.name, lang: got.lang, sure: got.sure, how: got.how } : null, pass, ms, error: err };
+    window.__results.push(res);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${i + 1}</td><td><a href="${esc(src)}" target="_blank"><img loading="lazy" src="${esc(src)}" alt=""></a></td>
+      <td>${esc(d)}</td><td>${esc(m.id)} <small>(${esc(m.lang)})</small></td>
+      <td>${got ? esc(got.id) + ' <small>' + esc(got.name) + ' (' + esc(got.lang) + ')</small>' : (err ? '<i>' + esc(err) + '</i>' : '<i>null</i>')}</td>
+      <td class="${!pass && sure ? 'sureWrong' : ''}">${got ? esc(got.sure) : ''}</td><td>${got ? esc(got.how) : ''}</td><td>${ms || ''}</td>
+      <td class="${pass ? 'PASS' : 'FAIL'}">${pass ? 'PASS' : 'FAIL'}</td>`;
+    tbody.appendChild(tr);
+    renderSummary();
+  }
+  const tot = window.__results.filter(r => r.pass).length;
+  status(`Finito: ${tot}/${list.length} PASS, ${sureWrong} sbagliate ma sure.`);
+  window.__summary = { stats, sureWrong, total: list.length, pass: tot };
+  window.__done = true;
+})();
+</script>
+</body>
+</html>
