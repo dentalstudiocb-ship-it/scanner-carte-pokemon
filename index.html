@@ -321,7 +321,8 @@ async function getWorker(){
 async function getNumWorker(){
   if(numWorker) return numWorker;
   const w = await Tesseract.createWorker("eng", 1);
-  await w.setParameters({tessedit_char_whitelist:"0123456789/ ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
+  // sparse-text mode: the collector number is a small isolated label
+  await w.setParameters({tessedit_char_whitelist:"0123456789/ ABCDEFGHIJKLMNOPQRSTUVWXYZ", tessedit_pageseg_mode:"11"});
   numWorker = w; return w;
 }
 function setOcr(pct, msg){ $("#ocrBox").style.display="block"; if(pct!=null) $("#ocrBar").style.width=pct+"%"; if(msg) $("#ocrStatus").textContent=msg; }
@@ -331,12 +332,13 @@ function setOcr(pct, msg){ $("#ocrBox").style.display="block"; if(pct!=null) $("
 const liveCamOK = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && window.top===window &&
   !(document.featurePolicy && !document.featurePolicy.allowsFeature("camera"));
 let scanning=false, busy=false, lastHitId=null, prevTopId=null;
-const hint = t => { $("#camHint").textContent=t; };
+const hint = (t, read) => { $("#camHint").innerHTML = esc(t) + (read ? `<div style="font-size:11px;font-weight:400;opacity:.85;margin-top:2px">Letto: ${esc(read)}</div>` : ""); };
+let noNumTicks=0, lastNameWord=null; const nameCache={};
 
 $("#btnCam").onclick = async ()=>{
   if(!liveCamOK){ $("#fileCam").click(); return; }
   try{
-    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1920},height:{ideal:1080}},audio:false});
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:2560},height:{ideal:1440}},audio:false});
   }catch(e){ toast("Permesso fotocamera negato: usa 'Carica foto'"); return; }
   const v=$("#video"); v.srcObject=stream; v.style.display="block";
   try{ const tr=stream.getVideoTracks()[0], caps=tr.getCapabilities?tr.getCapabilities():{};
@@ -345,7 +347,7 @@ $("#btnCam").onclick = async ()=>{
   ["#frame","#camHint","#scanline"].forEach(s=>$(s).style.display="block");
   $("#frame").classList.remove("hit"); $("#liveRes").style.display="none";
   $("#btnCam").style.display="none"; $("#btnSnap").style.display="";
-  $("#results").innerHTML=""; lastHitId=null; prevTopId=null;
+  $("#results").innerHTML=""; lastHitId=null; prevTopId=null; noNumTicks=0; lastNameWord=null;
   scanning=true;
   hint("Preparazione scanner… (solo la prima volta può volerci qualche secondo)");
   try{ await Promise.all([getWorker(), getNumWorker()]); }
@@ -360,11 +362,26 @@ function grabCard(){
   const vw=v.videoWidth, vh=v.videoHeight, scale=Math.max(box.width/vw, box.height/vh);
   const offX=(vw*scale-box.width)/2, offY=(vh*scale-box.height)/2;
   const sx=(fr.left-box.left+offX)/scale, sy=(fr.top-box.top+offY)/scale, sw=fr.width/scale, sh=fr.height/scale;
-  const c=document.createElement("canvas"); const outW=Math.min(900, Math.round(sw));
+  const c=document.createElement("canvas"); const outW=Math.min(1400, Math.round(sw));
   c.width=outW; c.height=Math.round(outW*sh/sw);
   const ctx=c.getContext("2d"); ctx.imageSmoothingQuality="high";
   ctx.drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);
   return c;
+}
+
+// Black/white image (Otsu threshold) with dark text on light background: much easier for OCR.
+function prepBin(src, x, y, w, h){
+  const up=Math.min(3, 1500/w);
+  const c=prep(src, x, y, w, h, up), ctx=c.getContext("2d");
+  const d=ctx.getImageData(0,0,c.width,c.height), p=d.data, hist=new Array(256).fill(0), n=p.length/4;
+  for(let i=0;i<p.length;i+=4) hist[p[i]]++;
+  let sum=0; for(let i=0;i<256;i++) sum+=i*hist[i];
+  let sumB=0,wB=0,best=0,th=128;
+  for(let t=0;t<256;t++){ wB+=hist[t]; if(!wB) continue; const wF=n-wB; if(!wF) break; sumB+=t*hist[t];
+    const mB=sumB/wB, mF=(sum-sumB)/wF, between=wB*wF*(mB-mF)*(mB-mF); if(between>best){best=between;th=t;} }
+  let dark=0; for(let i=0;i<p.length;i+=4){ const v=p[i]>th?255:0; p[i]=p[i+1]=p[i+2]=v; if(!v) dark++; }
+  if(dark>n/2) for(let i=0;i<p.length;i+=4){ p[i]=p[i+1]=p[i+2]=255-p[i]; } // light text on dark → invert
+  ctx.putImageData(d,0,0); return c;
 }
 
 async function scanTick(){
@@ -374,24 +391,57 @@ async function scanTick(){
   busy=true;
   try{
     const card=grabCard(), W=card.width, H=card.height;
-    const [num, top] = await Promise.all([
-      numWorker.recognize(prep(card,0,Math.round(H*0.85),W,Math.round(H*0.15),2)),
-      worker.recognize(prep(card,0,0,W,Math.round(H*0.14),1.5))
-    ]);
+    const namePromise = worker.recognize(prep(card,0,0,W,Math.round(H*0.16),Math.min(1.5,1400/W)));
+    const numText = await readNumber(card);
+    const top=(await namePromise).data, nameText=top.text;
+    // the card name is the biggest text at the top ("Evolves from …" is small): rank words by height
+    const nameWords=(top.words||[]).filter(w=>w.confidence>15).sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0)).map(w=>w.text).join(" ");
     if(!scanning) return;
-    const numText=num.data.text, nameText=top.data.text;
-    if(!parseNumbers(numText+"\n"+nameText).length){
-      if(!lastHitId) hint("Avvicina la carta: devo leggere il numero in basso (es. 025/165)");
+    const seen=(numText.match(/\d{1,3} ?\S? ?\d{2,3}/)||[])[0] || nameText.replace(/\s+/g," ").trim().slice(0,30);
+    const strict=parseNumbers(numText+"\n"+nameText), loose=strict.length?[]:parseNumbersLoose(numText);
+    if(!strict.length && !loose.length){
+      noNumTicks++;
+      if(!lastHitId) hint("Tieni la carta ferma, ben illuminata e senza riflessi: devo leggere il numero in basso (es. 025/165)", seen);
+      if(noNumTicks>=2) await nameFallback(nameWords||nameText);
     }else{
-      const cands = await identify(numText+"\n"+nameText, nameText, true);
+      const cands = await identify(numText+"\n"+nameText, nameText, true, strict.length?strict:loose);
       if(cands.length){
-        const t=cands[0], sure = cands.length===1 || (t._s>0 && t._s>(cands[1]._s??0));
-        if((sure || prevTopId===t.id) && t.id!==lastHitId) liveHit(t, cands);
+        const t=cands[0];
+        // a guessed (loose) number needs the name to agree, or the same result twice in a row
+        const sure = strict.length ? (cands.length===1 || (t._s>0 && t._s>(cands[1]._s??0)))
+                                   : (t._s>0 && t._s>(cands[1]?._s ?? -99));
+        if((sure || prevTopId===t.id) && t.id!==lastHitId){ liveHit(t, cands); noNumTicks=0; }
+        else if(!sure) noNumTicks++;
         prevTopId=t.id;
-      }
+      }else{ noNumTicks++; if(!lastHitId) hint("Numero letto ma non trovato, riprovo…", seen); }
+      if(noNumTicks>=3 && !lastHitId) await nameFallback(nameWords||nameText);
     }
   }catch(e){ console.error(e); }
-  finally{ busy=false; if(scanning) setTimeout(scanTick,200); }
+  finally{ busy=false; if(scanning) setTimeout(scanTick,150); }
+}
+
+// If the number can't be read, use the (bigger) name and let the user pick the right version by picture.
+async function nameFallback(nameText){
+  const sets=await getSets().catch(()=>[]), order={}; sets.forEach((s,i)=>order[s.id]=i);
+  for(const w of nameGuesses(nameText)){
+    const key=norm(w); if(key.length<4) continue;
+    if(key===lastNameWord) return;
+    let r=nameCache[key];
+    if(!r){
+      try{ r=await searchByName(w,"en"); if(!r.length) r=await searchByName(w,"it"); }catch(e){ r=[]; }
+      r=r.filter(c=>c.name.split(/[\s\-]+/).some(t=>norm(t)===key));
+      nameCache[key]=r;
+    }
+    if(!r.length) continue;
+    lastNameWord=key;
+    const setOf=id=>id.slice(0,id.lastIndexOf("-"));
+    r=[...r].sort((a,b)=>(order[setOf(b.id)]||0)-(order[setOf(a.id)]||0)).slice(0,40);
+    hint(`Ho letto «${w}»: scegli la tua versione qui sotto (o avvicina il numero)`);
+    $("#results").innerHTML=`<div class="card"><h2>Quale «${esc(w)}» hai?</h2><p class="small muted" style="margin-top:0">Non riesco a leggere il numero, ma ho riconosciuto il nome. Tocca la carta uguale alla tua.</p><div class="grid">${r.map(c=>`<div class="tile" data-id="${esc(c.id)}"><img loading="lazy" src="${img(c)}" alt=""><div class="n">${esc(c.name)}</div><div class="small muted">#${esc(c.localId)}</div></div>`).join("")}</div></div>`;
+    document.querySelectorAll("#results .tile").forEach(el=>el.onclick=()=>openCard(el.dataset.id));
+    if(navigator.vibrate) navigator.vibrate(30);
+    return;
+  }
 }
 
 async function liveHit(c, cands){
@@ -459,12 +509,12 @@ async function recognize(canvas){
     const full = await w.recognize(prep(canvas,0,0,W,H, W<1000?1.6:1));
     // pass 2: bottom strip, where the collector number is (e.g. 025/165)
     setOcr(0,"Lettura numero carta…");
-    await w.setParameters({tessedit_char_whitelist:"0123456789/ ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
-    const strip = await w.recognize(prep(canvas,0,Math.round(H*0.82),W,Math.round(H*0.18), 2.5));
-    await w.setParameters({tessedit_char_whitelist:""});
-    const text = full.data.text + "\n" + strip.data.text;
+    const numRead = await readNumber(canvas);
+    const text = full.data.text + "\n" + numRead;
     setOcr(100,"Ricerca carta nel database…");
-    const cands = await identify(text, full.data.text);
+    let cands = await identify(text, full.data.text, true);
+    if(!cands.length && parseNumbersLoose(numRead).length) cands = await identify(text, full.data.text, true, parseNumbersLoose(numRead));
+    if(!cands.length) cands = await identify(text, full.data.text);
     showResults(cands, text);
   }catch(err){
     console.error(err);
@@ -475,7 +525,7 @@ async function recognize(canvas){
 function parseNumbers(text){
   const out=[];
   const t = text.replace(/[Oo](?=\d)|(?<=\d)[Oo]/g,"0").replace(/[|Il](?=\d{2})/g,"1");
-  const re = /\b([A-Z]{0,3})(\d{1,3}) ?\/ ?([A-Z]{0,3})(\d{2,3})\b/g;
+  const re = /\b([A-Z]{0,3})(\d{1,3}) ?\/ ?([A-Z]{0,3})(\d{2,3})/g;
   let m; while((m=re.exec(t))){
     const n=parseInt(m[2],10), tot=parseInt(m[4],10);
     if(n>0 && tot>=10 && n<=tot+150){
@@ -484,6 +534,34 @@ function parseNumbers(text){
     }
   }
   return out;
+}
+// Tolerant reading: OCR often turns the thin "/" into 7, 1, | or drops it ("006 7 165", "0067165", "006 165").
+function parseNumbersLoose(text){
+  const out=[], seen=new Set(), t=text.replace(/[Oo](?=\d)|(?<=\d)[Oo]/g,"0");
+  // most likely readings first
+  const patterns=[/(\d{1,3}) ?[\/|] ?(\d{2,3})(?!\d)/g, /(\d{1,3}) +(\d{2,3})(?!\d)/g, /(\d{1,3}) [71] (\d{2,3})(?!\d)/g, /(\d{1,3})[71](\d{2,3})(?!\d)/g];
+  for(const re of patterns) for(const line of t.split(/\n/)){
+    re.lastIndex=0; let m;
+    while((m=re.exec(line))){
+      const n=parseInt(m[1],10), tot=parseInt(m[2],10), k=n+"/"+tot;
+      if(n>0 && tot>=20 && n<=tot+150 && !seen.has(k)){ seen.add(k); out.push({prefix:"",n,tot,raw:m[0],loose:true}); }
+      re.lastIndex=m.index+1; // overlapping guesses
+    }
+  }
+  return out.slice(0,6);
+}
+// Read the collector number in both bottom corners, with two image styles and two layout modes.
+async function readNumber(canvas){
+  const nw=await getNumWorker(), W=canvas.width, H=canvas.height, y0=Math.round(H*0.80), reads=[];
+  for(const [x,w] of [[0,Math.round(W*0.55)],[Math.round(W*0.45),Math.round(W*0.55)]]){
+    await nw.setParameters({tessedit_pageseg_mode:"11"});
+    reads.push((await nw.recognize(prepBin(canvas,x,y0,w,H-y0))).data.text);
+    if(parseNumbers(reads.join("\n")).length) break;
+    await nw.setParameters({tessedit_pageseg_mode:"6"});
+    reads.push((await nw.recognize(prep(canvas,x,y0,w,H-y0,Math.min(2.7,1500/w)))).data.text);
+    if(parseNumbers(reads.join("\n")).length) break;
+  }
+  return reads.join("\n");
 }
 const STOP = new Set(["BASIC","STAGE","EVOLVES","FROM","POKEMON","POKÉMON","TRAINER","ENERGY","WEAKNESS","RESISTANCE","RETREAT","ILLUS","ITEM","SUPPORTER","BASE","FASE","EVOLVE","DEBOLEZZA","RESISTENZA","RITIRATA","NINTENDO","CREATURES","GAME","FREAK","LENGTH","WEIGHT","ABILITY","ABILITÀ","RULE","STRUMENTO","ALLENATORE","ENERGIA"]);
 function nameGuesses(text){
@@ -506,11 +584,11 @@ function nameScore(cardName, text){
   return score;
 }
 
-async function identify(text, fullText, numberOnly){
-  const nums = parseNumbers(text);
+async function identify(text, fullText, numberOnly, numsIn){
+  const nums = numsIn || parseNumbers(text);
   const sets = await getSets();
   let found=[];
-  for(const num of nums.slice(0,3)){
+  for(const num of nums.slice(0,6)){
     // secret rares can exceed the official count; match sets on printed total
     const matchSets = sets.filter(s=>s.cardCount && s.cardCount.official===num.tot);
     const lists = await Promise.all(matchSets.slice(0,12).map(s=>getSet(s.id).catch(()=>null)));
