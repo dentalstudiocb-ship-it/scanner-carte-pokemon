@@ -117,7 +117,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v13</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v14</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -322,8 +322,48 @@ async function getSets(lang="en"){
 }
 const getSet  = (id, lang="en") => getJSON(`${API}/${lang}/sets/${encodeURIComponent(id)}`);
 // Card in its own language (localized name); prices come from the shared Cardmarket product.
-async function getCard(id, lang="en"){
+const fixedMem={};
+function getCard(id, lang="en"){
   if(!LANGS[lang]) lang="en";
+  const k=lang+"|"+id;
+  if(!fixedMem[k]){ fixedMem[k]=getCardRaw(id, lang).then(c=>fixPricing(c, lang)); fixedMem[k].catch(()=>delete fixedMem[k]); }
+  return fixedMem[k];
+}
+// USD → EUR (free ECB rates), cached for a day; fallback if offline
+let usdEurP=null;
+function usdEur(){
+  if(!usdEurP) usdEurP=(async()=>{
+    try{ const c=JSON.parse(localStorage.getItem("cardvault.usdeur")||"null"); if(c && Date.now()-c.t<864e5) return c.r; }catch(e){}
+    try{ const d=await (await fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR")).json(); const r=d.rates.EUR; try{ localStorage.setItem("cardvault.usdeur",JSON.stringify({t:Date.now(),r})); }catch(e){} return r; }
+    catch(e){ return 0.9; }
+  })();
+  return usdEurP;
+}
+// Newest sets: the price database sometimes links the full art / gold / special illustration to the
+// Cardmarket product of the BASE card (same product id) → that price is wrong for the rare one.
+// Then use the card's own TCGplayer price converted to euro, or show no price.
+async function fixPricing(card, lang){
+  const cm=cmPrices(card);
+  if(!cm || !cm.idProduct || !card.set || !card.set.id) return card;
+  const db=dbLang(lang);
+  try{
+    const st=await getSet(card.set.id, db);
+    const sibs=(st.cards||[]).filter(c=>c.id!==card.id && c.name===card.name).slice(0,6);
+    if(!sibs.length) return card;
+    const ds=await Promise.all(sibs.map(s=>getCardRaw(s.id, db).catch(()=>null)));
+    const shared=ds.filter(d=>d && cmPrices(d) && cmPrices(d).idProduct===cm.idProduct);
+    if(!shared.length) return card;
+    const owner=[card, ...shared].sort((a,b)=>numOf(a.localId)-numOf(b.localId))[0];   // the base print (lowest number) owns the product
+    if(owner.id===card.id) return card;
+    const tp=card.pricing && card.pricing.tcgplayer, r=await usdEur();
+    let best=null;
+    if(tp) for(const [k,v] of Object.entries(tp)){ if(!v || typeof v!=="object") continue; const p=v.marketPrice||v.midPrice||v.lowPrice; if(p>0 && (!best || p>best.p)) best={p, low:v.lowPrice, k}; }
+    const fixed = best ? {updated:tp.updated||cm.updated, unit:"EUR", idProduct:null, _src:"tcgplayer",
+      trend:+(best.p*r).toFixed(2), avg30:+(best.p*r).toFixed(2), avg7:+(best.p*r).toFixed(2), avg:+(best.p*r).toFixed(2), low:best.low?+(best.low*r).toFixed(2):null} : null;
+    return Object.assign({}, card, {pricing:Object.assign({}, card.pricing, {cardmarket:fixed}), _cmWrong:{baseId:owner.id, baseNum:owner.localId}});
+  }catch(e){ return card; }
+}
+async function getCardRaw(id, lang="en"){
   if(lang==="en"||lang==="ja") return getJSON(`${API}/${lang}/cards/${encodeURIComponent(id)}`);
   const en = getJSON(`${API}/en/cards/${encodeURIComponent(id)}`);
   try{
@@ -1544,13 +1584,14 @@ async function openCard(id, entry, langIn){
           <label style="margin-top:0">Lingua della carta</label>
           <select id="langSel" style="margin-bottom:8px">${langOpts}</select>
           ${vlist.length>1?`<label style="margin-top:0">Variante</label><div class="seg" id="varSeg" style="margin-bottom:10px">${vlist.map(v=>`<button data-v="${v}" class="${variant===v?"on":""}">${VARIANTS[v]}</button>`).join("")}</div>`:`<div class="small muted" style="margin-bottom:8px">Variante: <b>${VARIANTS[vlist[0]]}</b> (unica esistente)</div>`}
-          <div class="small muted">Valore Cardmarket (raw, NM)</div>
+          <div class="small muted">${card._cmWrong?"Valore TCGplayer in € (raw, NM)":"Valore Cardmarket (raw, NM)"}</div>
           <div class="price-main">${eur(raw)}</div>
           <table style="margin-top:8px">
             <tr><td class="muted">Trend</td><td class="r">${pr("trend")}</td><td class="muted">Da</td><td class="r">${pr("low")}</td></tr>
             <tr><td class="muted">Media 7g</td><td class="r">${pr("avg7")}</td><td class="muted">Media 30g</td><td class="r">${pr("avg30")}</td></tr>
           </table>
-          ${cm?`<div class="small muted" style="margin-top:6px">Aggiornato ${new Date(cm.updated).toLocaleDateString("it-IT")}${cm.idProduct?` · <a style="color:var(--accent2)" target="_blank" rel="noopener" href="https://www.cardmarket.com/it/Pokemon/Products?idProduct=${cm.idProduct}&language=${LANGS[lang]?LANGS[lang][2]:1}">Vedi offerte in ${LANGS[lang]?LANGS[lang][0].toLowerCase():"tutte le lingue"} su Cardmarket</a>`:""}</div>
+          ${cm?`<div class="small muted" style="margin-top:6px">Aggiornato ${new Date(cm.updated).toLocaleDateString("it-IT")}${cm.idProduct?` · <a style="color:var(--accent2)" target="_blank" rel="noopener" href="https://www.cardmarket.com/it/Pokemon/Products?idProduct=${cm.idProduct}&language=${LANGS[lang]?LANGS[lang][2]:1}">Vedi offerte in ${LANGS[lang]?LANGS[lang][0].toLowerCase():"tutte le lingue"} su Cardmarket</a>`:""}${card._cmWrong?` · <a style="color:var(--accent2)" target="_blank" rel="noopener" href="https://www.cardmarket.com/it/Pokemon/Products/Search?searchString=${encodeURIComponent(card.name)}">Cerca su Cardmarket</a>`:""}</div>
+          ${card._cmWrong?`<div class="note" style="margin-top:6px;border-color:var(--accent)"><b>Attenzione:</b> per questa versione (#${esc(card.localId)}) il database dei prezzi rimanda al prodotto della versione base (#${esc(card._cmWrong.baseNum)}), quindi il prezzo Cardmarket sarebbe sbagliato. Qui vedi il <b>prezzo TCGplayer convertito in euro</b>: controlla su Cardmarket l'offerta della versione giusta.</div>`:""}
           <div class="note" style="margin-top:6px">${isJa?"Carta giapponese: prezzo del prodotto giapponese su Cardmarket.":"Il prezzo Cardmarket è unico per tutte le lingue europee: le lingue meno richieste possono valere un po' meno. Il link mostra le offerte nella tua lingua."}${variant==="firstEdition"?" <b>1ª Edizione:</b> Cardmarket non pubblica un prezzo separato; il valore reale è di solito molto più alto.":""}</div>`:`<div class="small bad">Nessun prezzo Cardmarket disponibile.</div>`}
         </div>
       </div>
