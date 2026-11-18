@@ -117,7 +117,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v16</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v17</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -257,6 +257,13 @@ td.r,th.r{text-align:right}
 /* ====================== CONFIG & STATE ====================== */
 const API = "https://api.tcgdex.net/v2";
 const GRADES = ["10","9","8","7","6"];
+// Grading companies: [code, name, value vs PSA (estimate), typical cost €]
+const GRADERS = [
+  ["PSA","PSA",1.00,25],["BGS","Beckett (BGS)",0.85,25],["CGC","CGC",0.75,18],["SGC","SGC",0.70,20],["TAG","TAG",0.70,25],
+  ["ACE","ACE Grading",0.60,15],["PCA","PCA",0.55,15],["AP","AP Grading",0.50,12],["GMA","GMA",0.45,10],["HGA","HGA",0.50,20]];
+const graderOf = c => GRADERS.find(g=>g[0]===c) || GRADERS[0];
+const curGrader = () => (state && state.settings && state.settings.grader) || "PSA";
+const gradeCost = gc => gc==="PSA" ? state.settings.gradeCost : graderOf(gc)[3];
 const DEFAULT_MULT = {
   modern:  {"10":3.5,"9":1.6,"8":1.15,"7":0.95,"6":0.8},
   vintage: {"10":10, "9":3.2,"8":1.8, "7":1.3, "6":1.0}
@@ -290,7 +297,7 @@ function load(){
   try{ s = JSON.parse(localStorage.getItem(LS_KEY)); }catch(e){}
   if(!s) s = {};
   s.albums = s.albums || [{id:uid(),name:"La mia collezione",created:Date.now(),cards:[]}];
-  s.settings = Object.assign({priceField:"trend",gradeCost:25,cardLang:"auto",mult:JSON.parse(JSON.stringify(DEFAULT_MULT))}, s.settings||{});
+  s.settings = Object.assign({priceField:"trend",gradeCost:25,cardLang:"auto",grader:"PSA",mult:JSON.parse(JSON.stringify(DEFAULT_MULT))}, s.settings||{});
   s.albums.forEach(a=>a.cards.forEach(e=>{ if(e.variant==="holo" && !e.v2) e.variant="reverse"; e.v2=1; e.lang=e.lang||"en"; }));
   return s;
 }
@@ -443,16 +450,16 @@ function pickPrice(cm, variant, field){
 }
 function hasHoloPrice(cm){ return cm && ["trend-holo","avg30-holo","avg-holo","low-holo"].some(k=>cm[k]>0); }
 function isVintage(setId){ return VINTAGE_SERIES.test(setId||""); }
-function gradedEstimates(raw, setId){
+function gradedEstimates(raw, setId, grader){
   if(!raw) return null;
-  const m = state.settings.mult[isVintage(setId)?"vintage":"modern"];
-  const out={}; GRADES.forEach(g=>out[g]=raw*m[g]); return out;
+  const m = state.settings.mult[isVintage(setId)?"vintage":"modern"], f=graderOf(grader||curGrader())[2];
+  const out={}; GRADES.forEach(g=>out[g]=raw*m[g]*f); return out;
 }
 function condFactor(c){ return (CONDITIONS.find(x=>x[0]===c)||CONDITIONS[0])[2]; }
 function entryValue(e){
   const raw = pickPrice(e.cm, e.variant, state.settings.priceField);
   if(raw==null) return 0;
-  if(e.graded) return (gradedEstimates(raw, e.setId)||{})[e.graded]*e.qty || 0;
+  if(e.graded) return (gradedEstimates(raw, e.setId, e.grader||"PSA")||{})[e.graded]*e.qty || 0;
   return raw*condFactor(e.condition)*e.qty;
 }
 
@@ -1576,8 +1583,9 @@ async function openCard(id, entry, langIn){
   const render = ()=>{
     const f=state.settings.priceField;
     const raw = pickPrice(cm, variant, f);
-    const g = gradedEstimates(raw, card.set.id);
-    const cost = state.settings.gradeCost;
+    const gc = curGrader(), gname = gc;
+    const g = gradedEstimates(raw, card.set.id, gc);
+    const cost = gradeCost(gc);
     const sfx = variant==="reverse"?"-holo":"";
     const pr = k => cm ? eur(cm[k+sfx]>0?cm[k+sfx]:(variant==="reverse"?null:cm[k])) : "—";
     const langOpts = Object.entries(LANGS).filter(([k])=>isJa ? k==="ja" : k!=="ja").map(([k,v])=>`<option value="${k}" ${k===lang?"selected":""}>${v[1]} ${v[0]}</option>`).join("");
@@ -1604,12 +1612,12 @@ async function openCard(id, entry, langIn){
         </div>
       </div>
 
-      <h3>Se la fai gradare <span class="pill">stima</span></h3>
+      <h3 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Se la fai gradare <select id="graderSel" style="width:auto;min-height:34px;padding:4px 8px;font-size:14px">${GRADERS.map(x=>`<option value="${x[0]}" ${x[0]===gc?"selected":""}>${x[1]}</option>`).join("")}</select> <span class="pill">stima</span></h3>
       ${g?`<table>
         <tr><th>Voto</th><th class="r">Valore stimato</th><th class="r">Guadagno netto*</th></tr>
-        ${GRADES.map(gr=>{ const net=g[gr]-raw-cost; return `<tr><td><b>PSA ${gr}</b>${gr==="10"?' <span class="small muted">Gem Mint</span>':gr==="9"?' <span class="small muted">Mint</span>':""}</td><td class="r"><b>${eur(g[gr])}</b></td><td class="r ${net>0?"good":"bad"}">${net>0?"+":""}${eur(net)}</td></tr>`; }).join("")}
+        ${GRADES.map(gr=>{ const net=g[gr]-raw-cost; return `<tr><td><b>${gname} ${gr}</b>${gr==="10"?' <span class="small muted">Gem Mint</span>':gr==="9"?' <span class="small muted">Mint</span>':""}</td><td class="r"><b>${eur(g[gr])}</b></td><td class="r ${net>0?"good":"bad"}">${net>0?"+":""}${eur(net)}</td></tr>`; }).join("")}
       </table>
-      <div class="note">* Valore gradato − valore raw − costo gradazione (${eur(cost)}). Stime basate su coefficienti ${isVintage(card.set.id)?"<b>vintage</b>":"<b>moderni</b>"} modificabili in Impostazioni. ${(g["10"]-raw-cost)<=0?"<b>Per questa carta la gradazione probabilmente non conviene.</b>":(g["9"]-raw-cost)>0?"<b class='good'>Candidata interessante per la gradazione</b> (se in condizioni ottime).":"Conviene solo se ottieni un 10."}</div>`
+      <div class="note">* Valore gradato − valore raw − costo gradazione ${esc(graderOf(gc)[1])} (${eur(cost)}).${gc!=="PSA"?` Una carta ${esc(graderOf(gc)[1])} di solito vale circa il <b>${Math.round(graderOf(gc)[2]*100)}%</b> della stessa carta PSA (stima).`:""} Stime basate su coefficienti ${isVintage(card.set.id)?"<b>vintage</b>":"<b>moderni</b>"} modificabili in Impostazioni. ${(g["10"]-raw-cost)<=0?"<b>Per questa carta la gradazione probabilmente non conviene.</b>":(g["9"]-raw-cost)>0?"<b class='good'>Candidata interessante per la gradazione</b> (se in condizioni ottime).":"Conviene solo se ottieni un 10."}</div>`
       :`<p class="muted small">Serve un prezzo raw per stimare i valori gradati.</p>`}
 
       <h3>${entry?"Modifica nell'album":"Aggiungi all'album"}</h3>
@@ -1620,7 +1628,7 @@ async function openCard(id, entry, langIn){
       <div class="row">
         <div class="grow"><label>Condizione / gradazione</label><select id="addCond">
           ${CONDITIONS.map(c=>`<option value="${c[0]}">${c[0]} – ${c[1]}</option>`).join("")}
-          ${GRADES.map(gr=>`<option value="PSA${gr}">Gradata PSA ${gr}</option>`).join("")}
+          ${GRADES.map(gr=>`<option value="PSA${gr}">Gradata ${(entry&&entry.graded&&entry.grader)||gc} ${gr}</option>`).join("")}
         </select></div>
         <div style="width:130px"><label>Prezzo pagato (€)</label><input type="number" id="addBuy" min="0" step="0.01" placeholder="opz." value="${entry&&entry.buyPrice!=null?entry.buyPrice:""}"></div>
       </div>
@@ -1634,6 +1642,7 @@ async function openCard(id, entry, langIn){
       $("#addCond").value = entry.graded ? "PSA"+entry.graded : entry.condition;
     }
     document.querySelectorAll("#varSeg button").forEach(b=>b.onclick=()=>{ variant=b.dataset.v; render(); });
+    $("#graderSel").onchange=e=>{ state.settings.grader=e.target.value; save(); render(); };
     $("#langSel").onchange=async e=>{ lang=e.target.value; try{ const c2=await getCard(id, lang); card.name=c2.name; }catch(_){} render(); };
     $("#addAlbum").onchange=e=>{
       if(e.target.value!=="__new") return;
@@ -1647,13 +1656,13 @@ async function openCard(id, entry, langIn){
       const graded = cond.startsWith("PSA") ? cond.slice(3) : null;
       if(entry){
         const a=state.albums.find(a=>a.id===entry._album), e=a.cards.find(x=>x.uid===entry.uid);
-        Object.assign(e,{qty,variant,lang,name:card.name,condition:graded?"NM":cond,graded,buyPrice:bp,cm,updated:Date.now()});
+        Object.assign(e,{qty,variant,lang,name:card.name,condition:graded?"NM":cond,graded,grader:graded?((e.graded&&e.grader)||gc):null,buyPrice:bp,cm,updated:Date.now()});
         save(); closeSheet(); renderAlbum(); toast("Salvato");
         return;
       }
       const a=state.albums.find(a=>a.id===$("#addAlbum").value)||state.albums[0];
       a.cards.push({uid:uid(),cardId:card.id,name:card.name,setId:card.set.id,setName:card.set.name,localId:card.localId,
-        printed:card.set.cardCount?.official,image:card.image,imgFull:card.imgFull||null,rarity:card.rarity||"",variant,lang,v2:1,condition:graded?"NM":cond,graded,qty,buyPrice:bp,cm,added:Date.now(),updated:Date.now()});
+        printed:card.set.cardCount?.official,image:card.image,imgFull:card.imgFull||null,rarity:card.rarity||"",variant,lang,v2:1,condition:graded?"NM":cond,graded,grader:graded?gc:null,qty,buyPrice:bp,cm,added:Date.now(),updated:Date.now()});
       save(); closeSheet(); toast(`Aggiunta a "${a.name}"`);
     };
     if(entry) $("#btnDel").onclick=()=>{
@@ -1732,8 +1741,8 @@ function statsHTML(t){
   const gain=t.paidKnown-t.paid;
   return `<div class="stat big"><div class="k">Valore del lotto (Cardmarket)</div><div class="v">${eur(t.value)}</div></div>
     <div class="stat"><div class="k">Carte</div><div class="v">${t.count}</div></div>
-    <div class="stat"><div class="k">Se tutte PSA 9</div><div class="v">${eur(t.g9)}</div></div>
-    <div class="stat"><div class="k">Se tutte PSA 10</div><div class="v">${eur(t.g10)}</div></div>
+    <div class="stat"><div class="k">Se tutte ${curGrader()} 9</div><div class="v">${eur(t.g9)}</div></div>
+    <div class="stat"><div class="k">Se tutte ${curGrader()} 10</div><div class="v">${eur(t.g10)}</div></div>
     <div class="stat"><div class="k">Guadagno vs pagato</div><div class="v ${t.paid?(gain>=0?"good":"bad"):""}">${t.paid?(gain>=0?"+":"")+eur(gain):"—"}</div></div>`;
 }
 function renderHeader(){
@@ -1776,7 +1785,7 @@ function renderAlbum(){
     const el=document.createElement("div"); el.className="tile";
     el.innerHTML=`<img loading="lazy" src="${img(e)}" alt="">${e.qty>1?`<span class="q">×${e.qty}</span>`:""}
       <div class="n">${flag(e.lang)} ${esc(e.name)}</div><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.setName)} #${esc(e.localId)}</div>
-      <div class="row" style="justify-content:space-between;gap:4px"><span class="v">${eur(entryValue(e))}</span><span class="pill">${e.graded?"PSA "+e.graded:e.condition}${e.variant==="reverse"?" · RH":e.variant==="firstEdition"?" · 1ªEd":""}${/hyper rare/i.test(e.rarity||"")?" · GOLD":""}</span></div>`;
+      <div class="row" style="justify-content:space-between;gap:4px"><span class="v">${eur(entryValue(e))}</span><span class="pill">${e.graded?(e.grader||"PSA")+" "+e.graded:e.condition}${e.variant==="reverse"?" · RH":e.variant==="firstEdition"?" · 1ªEd":""}${/hyper rare/i.test(e.rarity||"")?" · GOLD":""}</span></div>`;
     el.onclick=()=> e.manual ? openManual(e, a.id) : openCard(e.cardId, Object.assign({_album:a.id}, e), e.lang);
     g.appendChild(el);
   });
@@ -1880,10 +1889,10 @@ $("#importFile").onchange=e=>{
   }).catch(()=>toast("File non valido"));
 };
 function exportCSV(cards, name){
-  const rows=[["Nome","Espansione","Numero","Lingua","Rarità","Variante","Condizione","Quantità","Prezzo unitario €","Valore totale €","Stima PSA 9 €","Stima PSA 10 €","Prezzo pagato €"]];
+  const rows=[["Nome","Espansione","Numero","Lingua","Rarità","Variante","Condizione","Quantità","Prezzo unitario €","Valore totale €",`Stima ${curGrader()} 9 €`,`Stima ${curGrader()} 10 €`,"Prezzo pagato €"]];
   cards.forEach(e=>{
     const raw=pickPrice(e.cm,e.variant,state.settings.priceField), g=gradedEstimates(raw,e.setId)||{};
-    rows.push([e.name,e.setName,`${e.localId}/${e.printed||""}`,langName(e.lang),rarityIt(e.rarity),VARIANTS[e.variant]||"Normale",e.graded?"PSA "+e.graded:e.condition,e.qty,(raw||0).toFixed(2),entryValue(e).toFixed(2),(g["9"]||0).toFixed(2),(g["10"]||0).toFixed(2),e.buyPrice??""]);
+    rows.push([e.name,e.setName,`${e.localId}/${e.printed||""}`,langName(e.lang),rarityIt(e.rarity),VARIANTS[e.variant]||"Normale",e.graded?(e.grader||"PSA")+" "+e.graded:e.condition,e.qty,(raw||0).toFixed(2),entryValue(e).toFixed(2),(g["9"]||0).toFixed(2),(g["10"]||0).toFixed(2),e.buyPrice??""]);
   });
   const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(";")).join("\n");
   download(`${(name||"collezione").replace(/[^\w\- ]/g,"")}.csv`, "﻿"+csv, "text/csv");
