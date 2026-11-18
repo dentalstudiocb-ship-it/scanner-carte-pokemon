@@ -116,7 +116,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v7</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v8</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -555,18 +555,18 @@ function fpDist(a, bin, off){
   return 3*h + c/8;
 }
 // Supplementary cards (missing in TCGdex or without picture there): data/extra-en.json + data/fp2-extra-en.bin
-let extraP=null, extraMap={};
-function loadExtra(){
-  if(!extraP){
-    extraP=(async()=>{
+const extraP={}; let extraMap={};
+function loadExtra(lang="en"){
+  if(!extraP[lang]){
+    extraP[lang]=(async()=>{
       const v=(document.querySelector('meta[name="db-version"]')||{}).content||"1";
-      const [recs, bin]=await Promise.all([cachedJSON(`data/extra-en.json?v=${v}`,14), cachedBinary(`data/fp2-extra-en.bin?v=${v}`)]);
-      recs.forEach(r=>extraMap[r.id]=r);
+      const [recs, bin]=await Promise.all([cachedJSON(`data/extra-${lang}.json?v=${v}`,14), cachedBinary(`data/fp2-extra-${lang}.bin?v=${v}`)]);
+      recs.forEach(r=>{ r._lang=lang; extraMap[r.id]=r; });
       return {recs, bin};
     })();
-    extraP.catch(()=>{ extraP=null; });
+    extraP[lang].catch(()=>{ delete extraP[lang]; });
   }
-  return extraP;
+  return extraP[lang];
 }
 function extraToCard(r){
   const cm=r.cardmarket;
@@ -576,9 +576,9 @@ function extraToCard(r){
 }
 // Any card id: TCGdex, or supplementary "ptcg:…", or TCGdex card whose picture comes from elsewhere
 async function getCardAny(id, lang="en"){
-  if(String(id).startsWith("ptcg:")){ await loadExtra().catch(()=>{}); if(extraMap[id]) return extraToCard(extraMap[id]); throw new Error("not found"); }
+  if(/^(ptcg|jsrc):/.test(String(id))){ await Promise.all([loadExtra("en").catch(()=>{}), loadExtra("ja").catch(()=>{})]); if(extraMap[id]) return extraToCard(extraMap[id]); throw new Error("not found"); }
   const c=await getCard(id, lang);
-  if(!c.image){ await loadExtra().catch(()=>{}); if(extraMap[id]) return Object.assign({}, c, {imgFull:extraMap[id].image}); }
+  if(!c.image){ await loadExtra(dbLang(lang)).catch(()=>{}); if(extraMap[id]) return Object.assign({}, c, {imgFull:extraMap[id].image}); }
   return c;
 }
 const fp2DB={};
@@ -604,8 +604,8 @@ async function visualMatch(card, langs, k=30){
         let db; try{ db=await loadFp2(lang); }catch(e){ continue; }
         FP2.search(fp, db.bin, k, 120).forEach(r=>out.push({id:db.ids[r.index], lang, dist:r.distance}));
       }
-      if(langs.includes("en")){
-        try{ const ex=await loadExtra(); FP2.search(fp, ex.bin, 10, 60).forEach(r=>{ const rec=ex.recs[r.index]; out.push({id:rec.id, lang:"en", dist:r.distance, extra:rec}); }); }catch(e){}
+      for(const lang of langs){
+        try{ const ex=await loadExtra(lang); FP2.search(fp, ex.bin, 10, 60).forEach(r=>{ const rec=ex.recs[r.index]; out.push({id:rec.id, lang, dist:r.distance, extra:rec}); }); }catch(e){}
       }
       if(out.length){ out.sort((a,b)=>a.dist-b.dist); out._fp2=true; return out.slice(0,k); }
     }catch(e){ console.warn("fp2",e); }
@@ -733,7 +733,7 @@ async function quickVisual(card, vis){
   const ix={en: await getNameIndex("en").catch(()=>null), ja: vis.slice(0,6).some(v=>v.lang==="ja") ? await getNameIndex("ja").catch(()=>null) : null};
   const list=[];
   vis.slice(0,6).forEach(v=>{
-    if(v.extra){ const r=v.extra; list.push({id:r.id, lang:"en", name:r.name, image:null, imgFull:r.image, localId:r.number, setId:r.setId, setName:r.setName, printed:r.printedTotal, _order:9999, _vis:v.dist, _n:0, _inName:false, _score:0}); return; }
+    if(v.extra){ const r=v.extra; list.push({id:r.id, lang:v.lang==="ja"?"ja":defaultLang(), name:r.name, image:null, imgFull:r.image, localId:r.number, setId:r.setId, setName:r.setName, printed:r.printedTotal, _order:9999, _vis:v.dist, _n:0, _inName:false, _score:0}); return; }
     const m=meta[v.lang][setOf(v.id)], ref=ix[v.lang]&&ix[v.lang].byId[v.id]; if(!m||!ref) return;
     list.push({id:v.id, lang:v.lang==="ja"?"ja":defaultLang(), name:ref.name, image:ref.image, localId:ref.localId, setId:setOf(v.id), setName:m.name, printed:m.tot, _order:m.i, _vis:v.dist, _n:0, _inName:false, _score:0});
   });
@@ -743,7 +743,19 @@ async function quickVisual(card, vis){
   if(!t || t._ver==null || t._ver<0.75) return null;
   if(s2 && s2._ver!=null && t._ver-s2._ver<0.12) return null;               // identical art (reprint / other language): read text too
   if(list.slice(1).some(c=>(c.lang==="ja")!==(t.lang==="ja") && c._ver!=null && t._ver-c._ver<0.2)) return null;
-  lastDiag={card, cands:list.slice(0,4), seen:"(non necessario)", nameText:"(non necessario)", lang:t.lang, detected:null};
+  let detected=null;
+  if(state.settings.cardLang==="auto"){
+    // same art is printed in English and Japanese: look at the attack text once to tell them apart
+    try{
+      const w=await getWorker(), W=card.width, H=card.height;
+      const r=await w.recognize(prep(card,0,Math.round(H*0.5),W,Math.round(H*0.42),Math.min(1.2,1200/W)));
+      detected=detectLang(r.data.text);
+    }catch(e){}
+    if(detected==="ja" && t.lang!=="ja") return null;          // Japanese text but European match → full analysis (Japanese DB)
+    if(detected && detected!=="ja" && t.lang==="ja") return null;
+    if(detected && detected!=="ja") list.forEach(c=>{ if(c.lang!=="ja") c.lang=detected; });
+  }
+  lastDiag={card, cands:list.slice(0,4), seen:"(non necessario)", nameText:"(non necessario)", lang:t.lang, detected};
   return {lang:t.lang, seen:"", word:null, best:t, cands:list, sure:true, how:"immagine verificata"};
 }
 async function analyzeCard(card){
@@ -778,7 +790,7 @@ async function analyzeCard(card){
   nc.list.forEach(c=>{ add(c)._inName=true; });
   const vbest = vis.length ? vis[0].dist : null;
   vis.forEach(v=>{
-    if(v.extra){ const r=v.extra; const c=add({id:r.id, lang:"en", name:r.name, imgFull:r.image, localId:r.number, setId:r.setId, setName:r.setName, printed:r.printedTotal, _order:9999}); c._vis=v.dist; return; }
+    if(v.extra){ const r=v.extra; const c=add({id:r.id, lang:v.lang==="ja"?"ja":(lang==="ja"?"en":lang), name:r.name, imgFull:r.image, localId:r.number, setId:r.setId, setName:r.setName, printed:r.printedTotal, _order:9999}); c._vis=v.dist; return; }
     const m=meta[v.lang][setOf(v.id)]; if(!m) return;
     const c=add({id:v.id, lang: v.lang==="ja"?"ja":(lang==="ja"?"en":lang), setId:setOf(v.id), setName:m.name, printed:m.tot, _order:m.i,
                  localId:v.id.slice(v.id.lastIndexOf("-")+1)});
@@ -848,7 +860,7 @@ function getVerDesc(c){
   return verCache[u];
 }
 async function verifyTop(card, cands, k){
-  await loadExtra().catch(()=>{});
+  await Promise.all([loadExtra("en").catch(()=>{}), loadExtra("ja").catch(()=>{})]);
   const top=cands.slice(0,k).filter(c=>candImageURL(c));
   if(!top.length) return;
   // query: a few crops so small misalignment doesn't matter
@@ -952,7 +964,7 @@ async function showEditions(c, cands){
   }catch(e){}
   const seen=new Set([c.id]), list=[];
   (cands||[]).forEach(x=>{ if(!seen.has(x.id) && (x.name||"").toLowerCase().includes(first||"\u0000")){ seen.add(x.id); list.push(x); } });
-  try{ await loadExtra(); Object.values(extraMap).forEach(r=>{ if(first && r.name.split(/[\s\-&]+/).some(t=>norm(t)===first)){ const ex=all.find(a=>a.id===r.id); if(ex) ex.imgFull=r.image; else all.push({id:r.id,name:r.name,localId:r.number,imgFull:r.image,setName:r.setName,printed:r.printedTotal,lang:"en",_order:9999}); } }); }catch(e){}
+  try{ await loadExtra(c.lang==="ja"?"ja":"en"); Object.values(extraMap).forEach(r=>{ if(first && r.name.split(/[\s\-&]+/).some(t=>norm(t)===first)){ const ex=all.find(a=>a.id===r.id); if(ex) ex.imgFull=r.image; else all.push({id:r.id,name:r.name,localId:r.number,imgFull:r.image,setName:r.setName,printed:r.printedTotal,lang:"en",_order:9999}); } }); }catch(e){}
   all.sort((a,b)=>b._order-a._order).forEach(x=>{ if(!seen.has(x.id)){ seen.add(x.id); list.push(x); } });
   if(!list.length){ box.innerHTML=""; return; }
   box.innerHTML=`<div class="card"><h2>È un'altra edizione? Sceglila tu</h2><p class="small muted" style="margin-top:0">Tutte le versioni di «${esc(c.name||"")}» (${list.length+1}). Tocca quella uguale alla tua: guarda bordo (gold, rainbow), illustrazione e simbolo dell'espansione.</p>
@@ -1474,7 +1486,7 @@ document.querySelectorAll("nav.tabs button").forEach(b=>b.onclick=()=>show(b.dat
 renderHeader();
 getSets().catch(()=>{});
 if(diagOn) $("#diag").style.display="";
-setTimeout(()=>{ getNameIndex("en").catch(()=>{}); (window.FP2?loadFp2:loadVisDB)("en").catch(()=>{}); loadExtra().catch(()=>{}); if(state.settings.cardLang==="auto"||state.settings.cardLang==="ja") (window.FP2?loadFp2:loadVisDB)("ja").catch(()=>{}); }, 1500);   // download the name list once in the background
+setTimeout(()=>{ getNameIndex("en").catch(()=>{}); (window.FP2?loadFp2:loadVisDB)("en").catch(()=>{}); loadExtra("en").catch(()=>{}); loadExtra("ja").catch(()=>{}); if(state.settings.cardLang==="auto"||state.settings.cardLang==="ja") (window.FP2?loadFp2:loadVisDB)("ja").catch(()=>{}); }, 1500);   // download the name list once in the background
 if("serviceWorker" in navigator && window.top===window && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>
