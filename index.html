@@ -116,7 +116,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v11</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v12</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -756,6 +756,7 @@ async function quickVisual(card, vis){
   });
   await verifyTop(card, list, 6);
   list.sort((a,b)=>(b._ver??-9)-(a._ver??-9));
+  quickVisual._last=list.slice();
   const t0=list[0];
   if(!t0 || t0._ver==null || t0._ver<0.75) return null;
   const fam=c=>c.lang==="ja"?"ja":"eu";
@@ -806,16 +807,29 @@ function innerCrops(card){
 async function analyzeCard(card){
   const visLangs0 = state.settings.cardLang==="ja" ? ["ja"] : state.settings.cardLang==="auto" ? ["en","ja"] : ["en"];
   let vis0 = await visualMatch(card, visLangs0).catch(()=>[]);
+  quickVisual._last=null;
   const quick = await quickVisual(card, vis0).catch(()=>null);
   if(quick) return quick;
+  // Votes: the same card being first both for the picture search and the picture check, on several crops,
+  // is strong evidence even when plastic glare/haze keeps the check score low (toploaders, sleeves)
+  const votes={};
+  const tally=(c,v)=>{ const ql=quickVisual._last; quickVisual._last=null; if(!ql||!ql.length||!v.length) return;
+    const t=ql[0]; if(t.id!==v[0].id || t._ver==null || t._ver<0.2) return;
+    const o=votes[t.id]||(votes[t.id]={n:0,ver:-9,cand:t,card:null,vis:null}); o.n++; if(t._ver>o.ver){ o.ver=t._ver; o.card=c; o.vis=v; } };
+  // plain photo already looks good (only a twin/reprint is close) → no voting, it is not a case problem
+  const ql0=quickVisual._last; quickVisual._last=null;
+  const caseLike = !ql0 || !ql0.length || ql0[0]._ver==null || ql0[0]._ver<0.55;
   // not certain: maybe the card is inside a toploader/sleeve → look for the card inside
   let bestCard=card, bestDist=vis0.length?vis0[0].dist:Infinity;
   for(const inner of innerCrops(card)){
     const v=await visualMatch(inner, visLangs0).catch(()=>[]);
     const q=await quickVisual(inner, v).catch(()=>null);
     if(q){ q.how += " · "+inner._how; return q; }
+    if(caseLike) tally(inner, v); else quickVisual._last=null;
     if(v.length && v[0].dist < bestDist*0.92){ bestDist=v[0].dist; bestCard=inner; vis0=v; }
   }
+  const voteTop=Object.values(votes).sort((a,b)=>b.n-a.n||b.ver-a.ver)[0];
+  if(voteTop && voteTop.n>=2){ bestCard=voteTop.card; vis0=voteTop.vis; }
   card=bestCard;
   await Promise.all([getWorker(), getNumWorker()]);
   const W=card.width, H=card.height;
@@ -856,6 +870,7 @@ async function analyzeCard(card){
                  localId:v.id.slice(v.id.lastIndexOf("-")+1)});
     c._vis=v.dist;
   });
+  if(voteTop && voteTop.n>=2 && !pool.has(voteTop.cand.id)){ const c=add(Object.assign({}, voteTop.cand)); c._vis=c._vis??null; }
   // fill names/images for visual-only candidates from the name index
   const cands=[...pool.values()];
   const idx={ en: await getNameIndex("en").catch(()=>null), ja: cands.some(c=>c.lang==="ja") ? await getNameIndex("ja").catch(()=>null) : null };
@@ -869,7 +884,8 @@ async function analyzeCard(card){
     // same artwork exists in Japanese and English: the detected language decides
     const fam = c.lang==="ja" ? "ja" : "eu";
     const famBonus = detected ? ((detected==="ja") === (fam==="ja") ? 15 : 0) : 0;
-    c._score = vs + (c._inName?30:0) + c._n*0.6 + famBonus;
+    c._votes = votes[c.id] && (!detected || (detected==="ja")===(c.lang==="ja")) ? votes[c.id].n : 0;   // votes can't overrule the language read on the card
+    c._score = vs + (c._inName?30:0) + c._n*0.6 + famBonus + Math.min(3,c._votes)*20;
   });
   cands.sort((x,y)=> y._score-x._score || (y._order||0)-(x._order||0));
   // Final check: compare the card with the REAL pictures of the most likely printings (normal vs full art vs gold…)
@@ -885,8 +901,8 @@ async function analyzeCard(card){
   const twin = !detected && cands.slice(1,4).some(c=>(c.lang==="ja")!==(t.lang==="ja") && c._vis!=null && t._vis!=null && Math.abs(c._vis-t._vis)<25);
   const sameArt = second && t._ver!=null && second._ver!=null && Math.abs(t._ver-second._ver)<0.04 && t._n<80;
   const sure = !twin && !sameArt && ((agree>=2 && margin>=8) || (t._n>=80 && t._inName) || (t._ver!=null && t._ver>=0.7 && margin>=10));
-  const weak = (t._ver==null || t._ver<0.35) && t._n<80 && !t._inName;
-  const ok = !weak && (sure || (agree>=1 && margin>=4) || t._n>=40);
+  const weak = (t._ver==null || t._ver<0.35) && t._n<80 && !t._inName && !(t._votes>=2);
+  const ok = !weak && (sure || (agree>=1 && margin>=4) || t._n>=40 || (t._votes>=2 && margin>=8));
   if(weak) return {...base, best:null, cands:cands.slice(0,8), sure:false, how:"incerto", word:nc.word, unsure:true};
   if(ok) return {...base, best:t, cands, sure, how, word:nc.word};
   return {...base, best:null, cands: nc.list.length?cands.filter(c=>c._inName):[], sure:false, how:"incerto: "+how, word:nc.word};
