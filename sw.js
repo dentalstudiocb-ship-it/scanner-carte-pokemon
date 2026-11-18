@@ -1,5 +1,5 @@
 // Network-first for the app shell, so updates arrive immediately; cache as offline fallback.
-const CACHE = "scanner-carte-v9";
+const CACHE = "scanner-carte-v10";
 const SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", e => {

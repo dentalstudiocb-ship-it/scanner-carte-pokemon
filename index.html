@@ -116,7 +116,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v9</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v10</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -758,11 +758,44 @@ async function quickVisual(card, vis){
   lastDiag={card, cands:list.slice(0,4), seen:"(non necessario)", nameText:"(non necessario)", lang:t.lang, detected};
   return {lang:t.lang, seen:"", word:null, best:t, cands:list, sure:true, how:"immagine verificata"};
 }
+// Card inside a toploader / sleeve: the detected rectangle is the plastic, the card sits inside it
+// (usually resting at the bottom). Candidate inner crops of an upright warped image.
+function innerCrops(card){
+  const W=card.width, H=card.height, out=[];
+  const cut=(x,y,w,h,how)=>{ const c=document.createElement("canvas"); c.width=900; c.height=1257;
+    c.getContext("2d").drawImage(card,x,y,w,h,0,0,900,1257); c._how=how; return c; };
+  if(window.CardFind){
+    try{
+      const f=CardFind.findCard(card);
+      if(f && f.score>=0.3){
+        const xs=f.corners.map(p=>p.x), ys=f.corners.map(p=>p.y);
+        const area=(Math.max(...xs)-Math.min(...xs))*(Math.max(...ys)-Math.min(...ys))/(W*H);
+        if(area>0.5 && area<0.93){ const w=CardFind.warp(card,f.corners,900,1257); w._how="carta dentro custodia"; out.push(w); }
+      }
+    }catch(e){}
+  }
+  // toploader 76x102 mm vs card 63x88 mm → card ≈ 83% wide, 86% tall
+  const cw=W*0.83, ch=H*0.86, x=(W-cw)/2;
+  out.push(cut(x, H-ch-H*0.02, cw, ch, "custodia (carta in basso)"));
+  out.push(cut(x, (H-ch)/2, cw, ch, "custodia (carta al centro)"));
+  out.push(cut(x, H*0.02, cw, ch, "custodia (carta in alto)"));
+  out.push(cut(W*0.05, H*0.04, W*0.9, H*0.92, "bustina"));
+  return out;
+}
 async function analyzeCard(card){
   const visLangs0 = state.settings.cardLang==="ja" ? ["ja"] : state.settings.cardLang==="auto" ? ["en","ja"] : ["en"];
-  const vis0 = await visualMatch(card, visLangs0).catch(()=>[]);
+  let vis0 = await visualMatch(card, visLangs0).catch(()=>[]);
   const quick = await quickVisual(card, vis0).catch(()=>null);
   if(quick) return quick;
+  // not certain: maybe the card is inside a toploader/sleeve → look for the card inside
+  let bestCard=card, bestDist=vis0.length?vis0[0].dist:Infinity;
+  for(const inner of innerCrops(card)){
+    const v=await visualMatch(inner, visLangs0).catch(()=>[]);
+    const q=await quickVisual(inner, v).catch(()=>null);
+    if(q){ q.how += " · "+inner._how; return q; }
+    if(v.length && v[0].dist < bestDist*0.92){ bestDist=v[0].dist; bestCard=inner; vis0=v; }
+  }
+  card=bestCard;
   await Promise.all([getWorker(), getNumWorker()]);
   const W=card.width, H=card.height;
   const namePromise = worker.recognize(prep(card,0,0,W,Math.round(H*0.16),Math.min(1.5,1400/W)));
