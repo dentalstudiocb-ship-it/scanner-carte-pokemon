@@ -117,7 +117,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v15</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v16</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -159,6 +159,7 @@ td.r,th.r{text-align:right}
       <input class="grow" id="qName" placeholder="Nome (opzionale)" style="flex:1">
     </div>
     <div class="row" style="margin-top:8px"><button class="btn blue grow" id="btnSearch">Cerca</button></div>
+    <div class="row" style="margin-top:8px"><button class="btn grow" id="btnManual">➕ Carta non presente? Aggiungila a mano</button></div>
   </div>
 
   <div id="results"></div>
@@ -388,7 +389,9 @@ function detectLang(text){
   if(best[0][1]===0 && up+low>=40 && up>low*1.5) return "ja";
   return null;
 }
-const flag = l => LANGS[l] ? LANGS[l][1] : "🏳️";
+const EXTRA_LANGS = {"zh-cn":["Cinese semplificato","🇨🇳"],"zh-tw":["Cinese tradizionale","🇹🇼"],ko:["Coreano","🇰🇷"],th:["Thailandese","🇹🇭"],id:["Indonesiano","🇮🇩"]};
+const flag = l => LANGS[l] ? LANGS[l][1] : EXTRA_LANGS[l] ? EXTRA_LANGS[l][1] : "🏳️";
+const langName = l => LANGS[l] ? LANGS[l][0] : EXTRA_LANGS[l] ? EXTRA_LANGS[l][0] : "";
 function rarityBadges(card){
   const r=card.rarity||"", out=[];
   const n=parseInt(String(card.localId).replace(/^\D+/,""),10), tot=card.set?.cardCount?.official;
@@ -1467,7 +1470,7 @@ async function identifyIn(text, fullText, numberOnly, numsIn, lang){
 async function showResults(cands, ocrText){
   const box=$("#results");
   if(!cands.length){
-    box.innerHTML=`<div class="card"><h2>Carta non riconosciuta</h2><p class="muted small">Prova con più luce, senza riflessi, con la carta dritta e il numero in basso ben visibile — oppure usa la ricerca manuale qui sopra.</p>${ocrText?`<details><summary class="small muted">Testo letto</summary><pre class="small muted" style="white-space:pre-wrap">${esc(ocrText)}</pre></details>`:""}</div>`;
+    box.innerHTML=`<div class="card"><h2>Carta non riconosciuta</h2><p class="muted small">Prova con più luce, senza riflessi, con la carta dritta e il numero in basso ben visibile — oppure usa la ricerca manuale qui sopra.</p><button class="btn" onclick="openManual(null, state.albums[0].id)">➕ Non c'è? Aggiungila a mano</button>${ocrText?`<details><summary class="small muted">Testo letto</summary><pre class="small muted" style="white-space:pre-wrap">${esc(ocrText)}</pre></details>`:""}</div>`;
     setOcr(0,""); $("#ocrBox").style.display="none";
     return;
   }
@@ -1662,6 +1665,57 @@ async function openCard(id, entry, langIn){
   render();
 }
 
+/* ---------- Cards that are not in the database (Chinese, Korean, rare promos…): added by hand ---------- */
+function photoToDataURL(file){
+  return new Promise((res,rej)=>{ const im=new Image(); im.onload=()=>{ const w=360, h=Math.round(im.height*w/im.width);
+    const c=document.createElement("canvas"); c.width=w; c.height=h; c.getContext("2d").drawImage(im,0,0,w,h); URL.revokeObjectURL(im.src); res(c.toDataURL("image/jpeg",0.75)); };
+    im.onerror=rej; im.src=URL.createObjectURL(file); });
+}
+function openManual(entry, albumId){
+  const e=entry||{}, price=e.cm?e.cm.trend:"";
+  const langs=Object.entries(LANGS).map(([k,v])=>[k,v[0],v[1]]).concat(Object.entries(EXTRA_LANGS).map(([k,v])=>[k,v[0],v[1]]));
+  const num = e.localId ? `${e.localId}${e.printed?"/"+e.printed:""}` : ($("#qNum").value||"");
+  openSheet(`<h2>${entry?"Modifica carta":"Aggiungi carta a mano"}</h2>
+    <p class="small muted" style="margin-top:0">Per le carte che non ci sono nel database (promo cinesi o coreane, carte molto rare…). Il prezzo lo scrivi tu: l'app non lo aggiorna.</p>
+    <div class="row" style="align-items:flex-start;gap:12px">
+      <label style="margin:0;cursor:pointer;flex:none"><img id="manImg" src="${e.imgFull||img({})}" style="width:96px;height:134px;object-fit:cover;border-radius:6px;border:1px solid var(--line)" alt=""><div class="small muted" style="text-align:center">📷 Foto</div><input type="file" id="manFile" accept="image/*" hidden></label>
+      <div class="grow">
+        <label style="margin-top:0">Nome</label><input id="manName" value="${esc(e.name||$("#qName").value||"")}" placeholder="es. Vaporeon VMAX">
+        <label>Espansione</label><input id="manSet" value="${esc(e.setName||"")}" placeholder="es. Eevee Advanced Gift Box">
+        <div class="row"><div class="grow"><label>Numero</label><input id="manNum" value="${esc(num)}" placeholder="es. 006/009"></div>
+          <div class="grow"><label>Lingua</label><select id="manLang">${langs.map(([k,n,f])=>`<option value="${k}" ${k===(e.lang||"zh-cn")?"selected":""}>${f} ${n}</option>`).join("")}</select></div></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="grow"><label>Prezzo (€) – lo decidi tu</label><input type="number" id="manPrice" min="0" step="0.01" value="${price??""}" placeholder="es. 25"></div>
+      <div style="width:90px"><label>Quantità</label><input type="number" id="manQty" min="1" value="${e.qty||1}"></div>
+    </div>
+    <div class="row">
+      <div class="grow"><label>Condizione</label><select id="manCond">${CONDITIONS.map(([k,l])=>`<option value="${k}" ${k===(e.condition||"NM")?"selected":""}>${k} · ${l}</option>`).join("")}</select></div>
+      <div class="grow"><label>Prezzo pagato (€)</label><input type="number" id="manBuy" min="0" step="0.01" placeholder="opz." value="${e.buyPrice??""}"></div>
+    </div>
+    ${entry?"":`<label>Album</label><select id="manAlbum">${state.albums.map(a=>`<option value="${a.id}" ${a.id===albumId?"selected":""}>${esc(a.name)}</option>`).join("")}</select>`}
+    <div class="row" style="margin-top:12px"><button class="btn primary grow" id="manSave">${entry?"Salva":"Aggiungi all'album"}</button>${entry?`<button class="btn danger" id="manDel">Rimuovi</button>`:""}</div>`);
+  let photo=e.imgFull||null;
+  $("#manFile").onchange=async ev=>{ const f=ev.target.files[0]; if(!f) return; try{ photo=await photoToDataURL(f); $("#manImg").src=photo; }catch(_){ toast("Foto non leggibile"); } };
+  $("#manSave").onclick=()=>{
+    const name=$("#manName").value.trim(); if(!name) return toast("Scrivi il nome della carta");
+    const m=$("#manNum").value.trim().match(/^([A-Za-z]*\d+[A-Za-z]*)\s*(?:\/\s*(\S+))?/);
+    const pr=$("#manPrice").value===""?null:parseFloat($("#manPrice").value);
+    const data={name, setName:$("#manSet").value.trim()||"Carta aggiunta a mano", setId:"manual", localId:m?m[1]:$("#manNum").value.trim(), printed:m&&m[2]?m[2]:"",
+      lang:$("#manLang").value, qty:Math.max(1,parseInt($("#manQty").value)||1), condition:$("#manCond").value, graded:null,
+      buyPrice:$("#manBuy").value===""?null:parseFloat($("#manBuy").value), imgFull:photo, image:null, variant:"normal", rarity:"", manual:true,
+      cm: pr!=null && pr>=0 ? {trend:pr, avg30:pr, avg7:pr, unit:"EUR", updated:new Date().toISOString(), manual:true} : null, updated:Date.now()};
+    if(entry){ const a=state.albums.find(x=>x.id===albumId), x=a&&a.cards.find(c=>c.uid===entry.uid); if(x) Object.assign(x, data); save(); closeSheet(); renderAlbum(); toast("Salvato"); return; }
+    const a=state.albums.find(x=>x.id===$("#manAlbum").value)||state.albums[0], u=uid();
+    try{ a.cards.push(Object.assign({uid:u, cardId:"man:"+u, v2:1, added:Date.now()}, data)); save(); }
+    catch(err){ return toast("Memoria piena: prova senza foto"); }
+    closeSheet(); toast(`Aggiunta a "${a.name}"`); if($("#v-album").classList.contains("active")) renderAlbum();
+  };
+  if(entry) $("#manDel").onclick=()=>{ if(!confirm("Rimuovere la carta dall'album?")) return; const a=state.albums.find(x=>x.id===albumId); a.cards=a.cards.filter(x=>x.uid!==entry.uid); save(); closeSheet(); renderAlbum(); toast("Rimossa"); };
+}
+$("#btnManual").onclick=()=>openManual(null, state.albums[0].id);
+
 /* ====================== ALBUMS ====================== */
 function albumTotals(cards){
   let value=0,count=0,paid=0,paidKnown=0,g9=0,g10=0;
@@ -1723,7 +1777,7 @@ function renderAlbum(){
     el.innerHTML=`<img loading="lazy" src="${img(e)}" alt="">${e.qty>1?`<span class="q">×${e.qty}</span>`:""}
       <div class="n">${flag(e.lang)} ${esc(e.name)}</div><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.setName)} #${esc(e.localId)}</div>
       <div class="row" style="justify-content:space-between;gap:4px"><span class="v">${eur(entryValue(e))}</span><span class="pill">${e.graded?"PSA "+e.graded:e.condition}${e.variant==="reverse"?" · RH":e.variant==="firstEdition"?" · 1ªEd":""}${/hyper rare/i.test(e.rarity||"")?" · GOLD":""}</span></div>`;
-    el.onclick=()=>openCard(e.cardId, Object.assign({_album:a.id}, e), e.lang);
+    el.onclick=()=> e.manual ? openManual(e, a.id) : openCard(e.cardId, Object.assign({_album:a.id}, e), e.lang);
     g.appendChild(el);
   });
 }
@@ -1739,9 +1793,11 @@ $("#btnAlbumMenu").onclick=()=>{
   openSheet(`<h2>${esc(a.name)}</h2><div class="list" style="margin-top:12px">
     <button class="btn" id="mRename">Rinomina album</button>
     <button class="btn" id="mRefresh">↻ Aggiorna prezzi di questo album</button>
+    <button class="btn" id="mManual">➕ Aggiungi una carta a mano</button>
     <button class="btn" id="mCsv">Esporta lotto in CSV</button>
     <button class="btn danger" id="mDelete">Elimina album</button></div>`);
   $("#mRename").onclick=()=>{ const n=prompt("Nuovo nome:",a.name); if(n&&n.trim()){a.name=n.trim();save();renderAlbum();} closeSheet(); };
+  $("#mManual").onclick=()=>openManual(null, a.id);
   $("#mRefresh").onclick=async()=>{ closeSheet(); await refreshPrices(a.cards); renderAlbum(); };
   $("#mCsv").onclick=()=>{ exportCSV(a.cards, a.name); closeSheet(); };
   $("#mDelete").onclick=()=>{
@@ -1757,6 +1813,7 @@ function forgetCard(id){
 }
 let refreshing=false;
 async function refreshPrices(cards, btn){
+  cards=cards.filter(c=>!c.manual);
   if(!cards.length) return toast("Nessuna carta da aggiornare");
   if(refreshing) return; refreshing=true;
   const label=btn?btn.textContent:null;
@@ -1826,7 +1883,7 @@ function exportCSV(cards, name){
   const rows=[["Nome","Espansione","Numero","Lingua","Rarità","Variante","Condizione","Quantità","Prezzo unitario €","Valore totale €","Stima PSA 9 €","Stima PSA 10 €","Prezzo pagato €"]];
   cards.forEach(e=>{
     const raw=pickPrice(e.cm,e.variant,state.settings.priceField), g=gradedEstimates(raw,e.setId)||{};
-    rows.push([e.name,e.setName,`${e.localId}/${e.printed||""}`,LANGS[e.lang]?LANGS[e.lang][0]:"",rarityIt(e.rarity),VARIANTS[e.variant]||"Normale",e.graded?"PSA "+e.graded:e.condition,e.qty,(raw||0).toFixed(2),entryValue(e).toFixed(2),(g["9"]||0).toFixed(2),(g["10"]||0).toFixed(2),e.buyPrice??""]);
+    rows.push([e.name,e.setName,`${e.localId}/${e.printed||""}`,langName(e.lang),rarityIt(e.rarity),VARIANTS[e.variant]||"Normale",e.graded?"PSA "+e.graded:e.condition,e.qty,(raw||0).toFixed(2),entryValue(e).toFixed(2),(g["9"]||0).toFixed(2),(g["10"]||0).toFixed(2),e.buyPrice??""]);
   });
   const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(";")).join("\n");
   download(`${(name||"collezione").replace(/[^\w\- ]/g,"")}.csv`, "﻿"+csv, "text/csv");
