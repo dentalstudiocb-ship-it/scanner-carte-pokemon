@@ -117,7 +117,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v14</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v15</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -167,6 +167,7 @@ td.r,th.r{text-align:right}
 <!-- ============ ALBUMS ============ -->
 <section class="view" id="v-albums">
   <div class="stats" id="globalStats"></div>
+  <div class="small muted" id="globalPriceAge" style="margin-top:6px"></div>
   <div class="row" style="margin:14px 0 10px">
     <h2 class="grow" style="margin:0">I tuoi album</h2>
     <button class="btn small" id="btnRefreshAll">↻ Aggiorna prezzi</button>
@@ -180,9 +181,11 @@ td.r,th.r{text-align:right}
   <div class="row" style="margin-bottom:12px">
     <button class="btn small" id="btnBack">← Album</button>
     <h2 class="grow" id="albumTitle" style="margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></h2>
+    <button class="btn small primary" id="btnAlbumRefresh">↻ Aggiorna</button>
     <button class="btn small" id="btnAlbumMenu">⋯</button>
   </div>
   <div class="stats" id="albumStats"></div>
+  <div class="small muted" id="albumPriceAge" style="margin-top:6px"></div>
   <div class="row" style="margin:14px 0 8px">
     <select id="sortSel" class="grow">
       <option value="value">Ordina: valore ↓</option>
@@ -1559,6 +1562,8 @@ async function openCard(id, entry, langIn){
   let card;
   try{ card = Object.assign({}, await getCardAny(id, lang)); }catch(e){ return openSheet(`<p class="bad">Impossibile caricare la carta.</p>`); }
   const cm = cmPrices(card);
+  if(entry && entry._album){ const al=state.albums.find(x=>x.id===entry._album), e0=al&&al.cards.find(c=>c.uid===entry.uid);
+    if(e0 && JSON.stringify(e0.cm)!==JSON.stringify(cm)){ e0.cm=cm; e0.updated=Date.now(); save(); } }
   const vlist = variantList(card);
   if(hasHoloPrice(cm) && !vlist.includes("reverse") && vlist.includes("normal")) vlist.splice(1,0,"reverse");
   let variant = entry && vlist.includes(entry.variant) ? entry.variant : vlist[0];
@@ -1684,6 +1689,7 @@ function renderHeader(){
 function renderAlbums(){
   const all=state.albums.flatMap(a=>a.cards);
   $("#globalStats").innerHTML=statsHTML(albumTotals(all));
+  $("#globalPriceAge").innerHTML=priceAgeHTML(all);
   $("#albumList").innerHTML="";
   state.albums.forEach(a=>{
     const t=albumTotals(a.cards);
@@ -1695,11 +1701,19 @@ function renderAlbums(){
     $("#albumList").appendChild(el);
   });
 }
+function priceAgeHTML(cards){
+  if(!cards.length) return "";
+  const t=cards.map(c=>c.updated||c.added||0).filter(Boolean); if(!t.length) return "";
+  const old=Math.min(...t), d=new Date(old), h=(Date.now()-old)/36e5;
+  const when = h<1 ? "meno di un'ora fa" : h<24 ? `${Math.floor(h)} ore fa` : d.toLocaleDateString("it-IT")+" "+d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+  return `Prezzi caricati: ${when}${h>=24?" · <b style='color:var(--accent)'>premi ↻ Aggiorna</b>":""} · Cardmarket aggiorna i dati circa una volta al giorno.`;
+}
 let currentAlbum=null;
 function renderAlbum(){
   const a=state.albums.find(x=>x.id===currentAlbum); if(!a) return show("albums");
   $("#albumTitle").textContent=a.name;
   $("#albumStats").innerHTML=statsHTML(albumTotals(a.cards));
+  $("#albumPriceAge").innerHTML=priceAgeHTML(a.cards);
   const s=$("#sortSel").value;
   const cards=[...a.cards].sort((x,y)=> s==="value"?entryValue(y)-entryValue(x) : s==="name"?x.name.localeCompare(y.name) : s==="set"?(x.setName+x.localId).localeCompare(y.setName+y.localId,undefined,{numeric:true}) : y.added-x.added);
   const g=$("#albumGrid"); g.innerHTML="";
@@ -1736,21 +1750,41 @@ $("#btnAlbumMenu").onclick=()=>{
     state.albums=state.albums.filter(x=>x.id!==a.id); save(); closeSheet(); show("albums");
   };
 };
-async function refreshPrices(cards){
-  if(!cards.length) return toast("Nessuna carta da aggiornare");
-  const ids=[...new Set(cards.map(c=>c.cardId))]; let done=0;
-  toast(`Aggiornamento 0/${ids.length}…`);
-  for(let i=0;i<ids.length;i+=6){
-    await Promise.all(ids.slice(i,i+6).map(async id=>{
-      delete mem[`${API}/en/cards/${encodeURIComponent(id)}`];
-      try{ const d=await getCardAny(id, dbLang(cards.find(c=>c.cardId===id).lang)); cards.filter(c=>c.cardId===id).forEach(c=>{c.cm=cmPrices(d); c.updated=Date.now();}); }catch(e){}
-      done++;
-    }));
-    toast(`Aggiornamento ${done}/${ids.length}…`);
-  }
-  save(); toast("Prezzi aggiornati");
+function forgetCard(id){
+  const enc="/cards/"+encodeURIComponent(id);
+  Object.keys(mem).forEach(k=>{ if(k.endsWith(enc)) delete mem[k]; });
+  Object.keys(fixedMem).forEach(k=>{ if(k.endsWith("|"+id)) delete fixedMem[k]; });
 }
-$("#btnRefreshAll").onclick=async()=>{ await refreshPrices(state.albums.flatMap(a=>a.cards)); renderAlbums(); };
+let refreshing=false;
+async function refreshPrices(cards, btn){
+  if(!cards.length) return toast("Nessuna carta da aggiornare");
+  if(refreshing) return; refreshing=true;
+  const label=btn?btn.textContent:null;
+  const ids=[...new Set(cards.map(c=>c.cardId))]; let done=0, changed=0, failed=0, before=0, after=0;
+  cards.forEach(c=>before+=entryValue(c));
+  const prog=()=>{ const t=`Aggiornamento ${done}/${ids.length}…`; if(btn) btn.textContent=`↻ ${done}/${ids.length}`; else toast(t); };
+  prog();
+  try{
+    for(let i=0;i<ids.length;i+=6){
+      await Promise.all(ids.slice(i,i+6).map(async id=>{
+        forgetCard(id);
+        const mine=cards.filter(c=>c.cardId===id);
+        try{
+          const d=await getCardAny(id, dbLang(mine[0].lang)), cm=cmPrices(d);
+          mine.forEach(c=>{ const o=pickPrice(c.cm,c.variant,state.settings.priceField), n=pickPrice(cm,c.variant,state.settings.priceField); if(o!==n) changed++; c.cm=cm; c.updated=Date.now(); });
+        }catch(e){ failed++; }
+        done++;
+      }));
+      prog();
+    }
+  }finally{ refreshing=false; if(btn) btn.textContent=label; }
+  cards.forEach(c=>after+=entryValue(c));
+  save();
+  const diff=after-before;
+  toast(failed===ids.length ? "Nessuna connessione: prezzi non aggiornati" : `Prezzi aggiornati: ${changed} cambiati · totale ${diff>=0?"+":""}${eur(diff)}${failed?` (${failed} non raggiunte)`:""}`);
+}
+$("#btnRefreshAll").onclick=async e=>{ await refreshPrices(state.albums.flatMap(a=>a.cards), e.currentTarget); renderAlbums(); };
+$("#btnAlbumRefresh").onclick=async e=>{ const a=state.albums.find(x=>x.id===currentAlbum); if(!a) return; await refreshPrices(a.cards, e.currentTarget); renderAlbum(); };
 
 /* ====================== SETTINGS ====================== */
 function renderSettings(){
