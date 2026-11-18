@@ -116,7 +116,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v10</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v11</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -355,6 +355,23 @@ const rarityIt = r => r ? (RARITY_IT[r] || r) : "";
 function variantList(card){
   const v=card.variants||{}, out=Object.keys(VARIANTS).filter(k=>v[k]);
   return out.length?out:["normal"];
+}
+// Japanese card names → English (species table from PokéAPI) so Japanese cards can be found by English name
+let jaNamesP=null;
+function loadJaNames(){
+  if(!jaNamesP){ jaNamesP=cachedJSON("data/names-ja.json?v=1",60).then(m=>{
+    const keys=Object.keys(m).sort((a,b)=>b.length-a.length), rev={};
+    for(const k of keys){ const e=norm(m[k]); if(!rev[e] || k.length>rev[e].length) rev[e]=k; }
+    return {m, keys, rev}; }); jaNamesP.catch(()=>{ jaNamesP=null; }); }
+  return jaNamesP;
+}
+const JA_PRE=[["ヒスイの","Hisuian "],["ガラルの","Galarian "],["アローラの","Alolan "],["パルデアの","Paldean "],["ガラル","Galarian "],["アローラ","Alolan "],["かがやく","Radiant "],["ロケット団の","Team Rocket's "],["ひかる","Shining "],["わるい","Dark "],["ダーク","Dark "]];
+function jaToEnSync(name, J){
+  if(!J || !name) return null;
+  let s=String(name), pre="";
+  for(const [k,v] of JA_PRE) if(s.startsWith(k)){ pre=v; s=s.slice(k.length); break; }
+  for(const k of J.keys) if(s.startsWith(k)) return (pre+J.m[k]+" "+s.slice(k.length).replace(/[（(].*$/,"").trim()).trim();
+  return null;
 }
 async function searchByName(name, lang="en"){
   return getJSON(`${API}/${lang}/cards?name=${encodeURIComponent(name)}&pagination:itemsPerPage=40`);
@@ -739,11 +756,10 @@ async function quickVisual(card, vis){
   });
   await verifyTop(card, list, 6);
   list.sort((a,b)=>(b._ver??-9)-(a._ver??-9));
-  const t=list[0], s2=list[1];
-  if(!t || t._ver==null || t._ver<0.75) return null;
-  if(s2 && s2._ver!=null && t._ver-s2._ver<0.12) return null;               // identical art (reprint / other language): read text too
-  if(list.slice(1).some(c=>(c.lang==="ja")!==(t.lang==="ja") && c._ver!=null && t._ver-c._ver<0.2)) return null;
-  let detected=null;
+  const t0=list[0];
+  if(!t0 || t0._ver==null || t0._ver<0.75) return null;
+  const fam=c=>c.lang==="ja"?"ja":"eu";
+  let detected=null, pool=list;
   if(state.settings.cardLang==="auto"){
     // same art is printed in English and Japanese: look at the attack text once to tell them apart
     try{
@@ -751,10 +767,15 @@ async function quickVisual(card, vis){
       const r=await w.recognize(prep(card,0,Math.round(H*0.5),W,Math.round(H*0.42),Math.min(1.2,1200/W)));
       detected=detectLang(r.data.text);
     }catch(e){}
-    if(detected==="ja" && t.lang!=="ja") return null;          // Japanese text but European match → full analysis (Japanese DB)
-    if(detected && detected!=="ja" && t.lang==="ja") return null;
-    if(detected && detected!=="ja") list.forEach(c=>{ if(c.lang!=="ja") c.lang=detected; });
+    if(detected){ const f=detected==="ja"?"ja":"eu"; pool=list.filter(c=>fam(c)===f); if(f==="eu") pool.forEach(c=>c.lang=detected); }
+    // language not readable and the same art exists in both languages → full analysis
+    // (unless the picture clearly prefers one: the text box differs between English and Japanese prints)
+    else if(list.slice(1).some(c=>fam(c)!==fam(t0) && c._ver!=null && (t0._ver-c._ver<0.12 || (t0._ver-c._ver<0.2 && !(t0._vis*2.5<c._vis))))) return null;
   }
+  const t=pool[0], s2=pool[1];
+  if(!t || t._ver==null || t._ver<0.75 || t._ver<t0._ver-0.08) return null;
+  if(s2 && s2._ver!=null && t._ver-s2._ver<0.12) return null;               // identical art (reprint): read the number too
+  list.sort((a,b)=>(b===t)-(a===t));
   lastDiag={card, cands:list.slice(0,4), seen:"(non necessario)", nameText:"(non necessario)", lang:t.lang, detected};
   return {lang:t.lang, seen:"", word:null, best:t, cands:list, sure:true, how:"immagine verificata"};
 }
@@ -814,11 +835,17 @@ async function analyzeCard(card){
   const strict=parseNumbers(numText), loose=strict.length?[]:parseNumbersLoose(numText);
   const seen=(numText.match(/\d{1,3} ?\S? ?\d{2,3}/)||[])[0] || "";
   const base={lang, seen, word:null};
+  const meta0={en:setMeta(await getSets("en").catch(()=>[])), ja:setMeta(await getSets("ja").catch(()=>[]))};
 
   // Evidence: picture (visual match), name (OCR, fuzzy), number (OCR). Combine all three.
   const [vis, nc] = await Promise.all([visPromise, nameCandidates(nameWords||nameText, lang)]);
   const pool=new Map();
-  const meta={en:setMeta(await getSets("en").catch(()=>[])), ja:setMeta(await getSets("ja").catch(()=>[]))};
+  // number-only candidates: Japanese cards (name not readable), or any card when no name was read
+  const numFams = strict.length ? (detected==="ja" || state.settings.cardLang==="ja" ? ["ja"] : (!nc.list.length && state.settings.cardLang==="auto") ? ["ja","en"] : []) : [];
+  for(const fam of numFams){
+    try{ (await identifyIn("", "", true, strict.filter(x=>!x.prefix).slice(0,2), fam==="ja"?"ja":lang)).slice(0,10).forEach(c=>{ if(!pool.has(c.id)) pool.set(c.id, Object.assign({_vis:null,_inName:false,_order:(meta0[fam]||{})[c.setId]?.i}, c)); }); }catch(e){}
+  }
+  const meta=meta0;
   const add=(c)=>{ if(!pool.has(c.id)) pool.set(c.id, Object.assign({_vis:null,_inName:false}, c)); return pool.get(c.id); };
   nc.list.forEach(c=>{ add(c)._inName=true; });
   const vbest = vis.length ? vis[0].dist : null;
@@ -1218,7 +1245,7 @@ async function showResults(cands, ocrText){
   const list=$("#resList");
   cands.slice(0,40).forEach((c,i)=>{
     const el=document.createElement("div"); el.className="item";
-    el.innerHTML=`<img loading="lazy" src="${img(c)}" alt=""><div style="min-width:0"><div class="t">${c.lang?flag(c.lang)+" ":""}${esc(c.locName||c.name)}</div><div class="small muted">${esc(c.setName||c.id)} · #${esc(c.localId)}${c.printed?"/"+c.printed:""}</div></div><div class="p"><span class="spin"></span></div>`;
+    el.innerHTML=`<img loading="lazy" src="${img(c)}" alt=""><div style="min-width:0"><div class="t">${c.lang?flag(c.lang)+" ":""}${esc(c.locName||c.name)}${c.enName?` <span class="small muted">${esc(c.enName)}</span>`:""}</div><div class="small muted">${esc(c.setName||c.id)} · #${esc(c.localId)}${c.printed?"/"+c.printed:""}</div></div><div class="p"><span class="spin"></span></div>`;
     el.onclick=()=>openCard(c.id, null, c.lang);
     list.appendChild(el);
     // lazy price for first results
@@ -1229,29 +1256,67 @@ async function showResults(cands, ocrText){
     }).catch(()=>el.querySelector(".p").textContent="—");
     else el.querySelector(".p").textContent="›";
   });
+  if(new Set(cands.map(c=>c.lang==="ja")).size>1) list.insertAdjacentHTML("beforebegin",`<div class="small muted" style="margin-bottom:6px">Il codice esiste sia in inglese che in giapponese: 🇯🇵 = carta giapponese con prezzo giapponese.</div>`);
   if(cands.length===1 || (cands[0]._s>0 && cands[0]._s>(cands[1]._s??0))) openCard(cands[0].id, null, cands[0].lang);
 }
 
 $("#btnSearch").onclick = manualSearch;
 $("#qName").onkeydown = $("#qNum").onkeydown = e=>{ if(e.key==="Enter") manualSearch(); };
 async function manualSearch(){
-  const name=$("#qName").value.trim(), num=$("#qNum").value.trim();
+  let name=$("#qName").value.trim(), num=$("#qNum").value.trim();
   if(!name && !num) return toast("Scrivi un nome o un numero");
   $("#results").innerHTML=`<div class="card"><span class="spin"></span> Ricerca…</div>`;
   try{
+    const [setsEn, setsJa, J] = await Promise.all([getSets("en").catch(()=>[]), getSets("ja").catch(()=>[]), loadJaNames().catch(()=>null)]);
+    // a set code may be typed anywhere: "SV2a 201/165", "s8b 280", "sv03.5 25"
+    let setHit=null;
+    const toks=(name+" "+num).split(/[\s,;]+/).filter(Boolean);
+    for(const t of toks){
+      const k=t.toLowerCase();
+      const ja=setsJa.find(x=>x.id.toLowerCase()===k), en=setsEn.find(x=>x.id.toLowerCase()===k);
+      if(ja||en){ setHit={ja, en, tok:t}; break; }
+    }
+    if(setHit){ name=name.split(/\s+/).filter(t=>t!==setHit.tok).join(" "); num=num.split(/\s+/).filter(t=>t!==setHit.tok).join(" "); }
+    if(!num){ const m=name.match(/(^|\s)(\d{1,3}(?:\s*\/\s*\d{2,3})?)(\s|$)/); if(m){ num=m[2]; name=name.replace(m[2],"").trim(); } }
+    const mN=num.match(/(\d{1,3})(?:\s*\/\s*(\d{2,3}))?/), n=mN?parseInt(mN[1],10):null, tot=mN&&mN[2]?parseInt(mN[2],10):null;
+    const mode=state.settings.cardLang;
+    const fams = setHit ? [setHit.ja?"ja":null, setHit.en?"en":null].filter(Boolean) : mode==="ja" ? ["ja"] : mode==="auto" ? ["en","ja"] : ["en"];
     let cands=[];
-    if(num && /\//.test(num)){
-      cands = await identify(num.replace(/\s/g,""), name);
-      if(name) cands = cands.filter(c=>nameScore(c.name,name)>0 || cands.length<4);
+    for(const fam of fams){
+      const lang = fam==="ja" ? "ja" : defaultLang();
+      let found=[];
+      if(setHit && setHit[fam]){
+        const st=await getSet(setHit[fam].id, fam).catch(()=>null);
+        if(st && st.cards) st.cards.forEach(c=>{ if(n==null || numOf(c.localId)===n) found.push({id:c.id,name:c.name,localId:c.localId,image:c.image,setName:st.name,setId:st.id,printed:st.cardCount&&st.cardCount.official,lang}); });
+      }else if(tot){
+        found = await identifyIn(`${n}/${tot}`, "", true, [{prefix:"",n,tot}], lang).catch(()=>[]);
+      }else if(name){
+        let r=[];
+        if(fam==="ja"){
+          const kata = J && (J.rev[norm(name.split(/\s+/)[0])] || null);
+          r = await searchByName(kata || name, "ja").catch(()=>[]);
+        }else{
+          r = await searchByName(name,"en").catch(()=>[]);
+          if(!r.length) r = await searchByName(name,"it").catch(()=>[]);
+        }
+        if(n!=null) r=r.filter(c=>numOf(c.localId)===n);
+        found = r.map(c=>({id:c.id,name:c.name,localId:c.localId,image:c.image,lang}));
+      }
+      cands.push(...(fams.length>1 && !tot && !setHit ? found.slice(0,20) : found));
     }
-    if(!cands.length && name){
-      let r = await searchByName(name,"en");
-      if(!r.length) r = await searchByName(name,"it");
-      if(num){ const n=parseInt(num,10); r=r.filter(c=>parseInt(c.localId.replace(/^\D+/,""),10)===n); }
-      cands = r.map(c=>({id:c.id,name:c.name,localId:c.localId,image:c.image}));
+    // names: Japanese cards also get their English name, so "Charizard 201/165" finds リザードンex
+    cands.forEach(c=>{ if(c.lang==="ja"){ c.enName=jaToEnSync(c.name, J); } });
+    if(name && cands.length>1){
+      cands.forEach(c=>{ c._s=Math.max(nameScore(c.name,name), c.enName?nameScore(c.enName,name):-99, c.name.includes(name)?9:-99); });
+      const hit=cands.filter(c=>c._s>0);
+      if(hit.length) cands=hit.sort((a,b)=>b._s-a._s);
     }
+    // Japanese cards without a TCGdex picture: use the supplementary picture
+    if(cands.some(c=>c.lang==="ja" && !c.image)){ await loadExtra("ja").catch(()=>{}); cands.forEach(c=>{ if(!c.image && extraMap[c.id]) c.imgFull=extraMap[c.id].image; }); }
+    const fam2=new Set(cands.map(c=>c.lang==="ja"?"ja":"eu"));
+    if(fam2.size>1) cands.forEach(c=>c._s=undefined);   // English and Japanese both match: let the user choose
     showResults(cands,"");
-  }catch(e){ $("#results").innerHTML=`<div class="card bad">Errore di rete. Controlla la connessione.</div>`; }
+  }catch(e){ console.error(e); $("#results").innerHTML=`<div class="card bad">Errore di rete. Controlla la connessione.</div>`; }
 }
 
 /* ====================== CARD DETAIL SHEET ====================== */
@@ -1269,6 +1334,7 @@ async function openCard(id, entry, langIn){
   if(hasHoloPrice(cm) && !vlist.includes("reverse") && vlist.includes("normal")) vlist.splice(1,0,"reverse");
   let variant = entry && vlist.includes(entry.variant) ? entry.variant : vlist[0];
   const isJa = dbLang(lang)==="ja";
+  if(isJa){ try{ card._en=jaToEnSync(card.name, await loadJaNames()); }catch(e){} }
 
   const render = ()=>{
     const f=state.settings.priceField;
@@ -1284,7 +1350,7 @@ async function openCard(id, entry, langIn){
         <img class="big" src="${img(card,"high")}" alt="">
         <div class="info">
           <div class="small muted">${esc(card.set.name)} · <b style="color:var(--text)">#${esc(card.localId)}/${card.set.cardCount?.official??"?"}</b></div>
-          <h2 style="font-size:22px;margin:4px 0 6px">${esc(card.name)}</h2>
+          <h2 style="font-size:22px;margin:4px 0 6px">${esc(card.name)}</h2>${isJa&&card._en?`<div class="small muted" style="margin:-4px 0 6px">${esc(card._en)}</div>`:""}
           <div class="badges" style="margin-bottom:8px">${card.rarity?`<span class="pill">${esc(rarityIt(card.rarity))}</span>`:""}${badgesHTML(card)}</div>
           <label style="margin-top:0">Lingua della carta</label>
           <select id="langSel" style="margin-bottom:8px">${langOpts}</select>
