@@ -52,6 +52,7 @@ label{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px}
 .cam video,.cam img{width:100%;height:100%;object-fit:cover;display:block}
 .cam .frame{position:absolute;top:12.3%;bottom:12.3%;left:14%;right:14%;border:3px solid rgba(255,203,5,.85);border-radius:12px;pointer-events:none;box-shadow:0 0 0 2000px rgba(0,0,0,.35);transition:border-color .2s}
 .cam .frame.hit{border-color:var(--good)}
+.cam .frame.code{top:41%;bottom:41%;left:5%;right:5%;border-radius:8px}
 .cam .scanline{position:absolute;left:14%;right:14%;height:2px;background:var(--accent);box-shadow:0 0 12px var(--accent);top:12.3%;animation:scan 2.2s ease-in-out infinite alternate;pointer-events:none}
 @keyframes scan{to{top:87.7%}}
 .cam .hint{position:absolute;left:0;right:0;top:10px;text-align:center;font-size:13px;color:#fff;text-shadow:0 1px 3px #000;font-weight:600}
@@ -116,7 +117,7 @@ td.r,th.r{text-align:right}
 </head>
 <body>
 <header>
-  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v12</span>
+  <div class="logo"></div><h1>Scanner Carte</h1><span class="pill" id="verTag" style="font-size:10px">v13</span>
   <span class="sub" id="hdrTotal"></span>
 </header>
 
@@ -137,6 +138,7 @@ td.r,th.r{text-align:right}
   </div>
   <div class="row">
     <button class="btn primary grow" id="btnCam">Avvia scanner</button>
+    <button class="btn blue grow" id="btnCode" title="Leggi il codice stampato in basso (es. SV2a 201/165)">🔢 Codice</button>
     <button class="btn grow" id="btnSnap" style="display:none">■ Ferma scanner</button>
     <button class="btn" id="btnZoom" style="display:none">Zoom 2×</button>
     <button class="btn" id="btnDiag" title="Diagnosi">🔍</button>
@@ -150,10 +152,11 @@ td.r,th.r{text-align:right}
   </div>
 
   <div class="card" style="margin-top:14px">
-    <h2>Cerca a mano</h2>
+    <h2>Cerca per codice o nome</h2>
+    <div class="small muted" style="margin:-4px 0 6px">Scrivi il codice stampato in basso a sinistra: giapponese <b>SV2a 201/165</b>, inglese <b>SVI 198/198</b> o solo <b>201/165</b>.</div>
     <div class="row">
-      <input class="grow" id="qName" placeholder="Nome (es. Charizard, Pikachu…)" style="flex:2">
-      <input class="grow" id="qNum" placeholder="N° (es. 25/165)" style="flex:1">
+      <input class="grow" id="qNum" placeholder="Codice (es. SV2a 201/165)" style="flex:1.4" autocapitalize="off" autocomplete="off">
+      <input class="grow" id="qName" placeholder="Nome (opzionale)" style="flex:1">
     </div>
     <div class="row" style="margin-top:8px"><button class="btn blue grow" id="btnSearch">Cerca</button></div>
   </div>
@@ -308,11 +311,12 @@ async function getJSON(url){
 const dbLang = l => l==="ja" ? "ja" : "en";       // Japanese cards are separate products; European languages share one
 async function getSets(lang="en"){
   lang=dbLang(lang);
-  const k="cardvault.sets."+lang; let cached=null; try{ cached=JSON.parse(localStorage.getItem(k)||"null"); }catch(e){}
+  const k="cardvault.sets2."+lang; let cached=null; try{ cached=JSON.parse(localStorage.getItem(k)||"null"); }catch(e){}
   if(cached && Date.now()-cached.t < 864e5) return cached.d;
   let d = await getJSON(`${API}/${lang}/sets`);
   // drop Pokémon TCG Pocket (digital-only) sets
   try{ const tp = await getJSON(`${API}/${lang}/series/tcgp`); const ids=new Set((tp.sets||[]).map(x=>x.id)); d=d.filter(x=>!ids.has(x.id)); }catch(e){}
+  if(lang==="ja") d=d.filter(x=>!/^CS/.test(x.id));   // "CS…" are Chinese sets, not Japanese
   try{ localStorage.setItem(k, JSON.stringify({t:Date.now(),d})); }catch(e){}
   return d;
 }
@@ -333,9 +337,12 @@ function detectLang(text){
   const toks=(text||"").toLowerCase().split(/[^a-zàâäçéèêëîïôöùûüßñõãóíúá']+/).filter(Boolean);
   const sc={}; for(const l in LANG_WORDS){ const set=new Set(LANG_WORDS[l]); sc[l]=new Set(toks.filter(t=>t.length>=2&&set.has(t))).size; }
   const best=Object.entries(sc).sort((a,b)=>b[1]-a[1]);
-  if(best[0][1]>=2 && best[0][1]>best[1][1]) return best[0][0];
+  if(best[0][1]>=3 && best[0][1]>best[1][1]) return best[0][0];   // 3 real words: OCR noise from Japanese text can hit 2 by chance
   const words=toks.filter(t=>t.length>=4 && /^[a-z]+$/.test(t)).length;
   if(best[0][1]===0 && words<4) return "ja";   // no readable Latin text at all → most likely Japanese
+  // Japanese read by the English OCR = capital-letter gibberish; real European card text is mostly lowercase
+  const up=((text||"").match(/[A-Z]/g)||[]).length, low=((text||"").match(/[a-z]/g)||[]).length;
+  if(best[0][1]===0 && up+low>=40 && up>low*1.5) return "ja";
   return null;
 }
 const flag = l => LANGS[l] ? LANGS[l][1] : "🏳️";
@@ -429,7 +436,11 @@ let scanning=false, busy=false, lastHitId=null, prevTopId=null;
 const hint = (t, read) => { $("#camHint").innerHTML = esc(t) + (read ? `<div style="font-size:11px;font-weight:400;opacity:.85;margin-top:2px">Letto: ${esc(read)}</div>` : ""); };
 let noNumTicks=0, lastNameWord=null, lastLang=null; const nameCache={};
 
-$("#btnCam").onclick = async ()=>{
+$("#btnCam").onclick = ()=>startCam(false);
+$("#btnCode").onclick = ()=>startCam(true);
+let codeMode=false;
+async function startCam(code){
+  codeMode=!!code;
   if(!liveCamOK){ $("#fileCam").click(); return; }
   try{
     stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080},frameRate:{ideal:30}},audio:false});
@@ -441,15 +452,16 @@ $("#btnCam").onclick = async ()=>{
   $("#shot").style.display="none"; $("#camEmpty").style.display="none";
   ["#frame","#camHint","#scanline"].forEach(s=>$(s).style.display="block");
   $("#frame").classList.remove("hit"); $("#liveRes").style.display="none";
-  $("#btnCam").style.display="none"; $("#btnSnap").style.display="";
+  $("#btnCam").style.display="none"; $("#btnCode").style.display="none"; $("#btnSnap").style.display="";
+  $("#frame").classList.toggle("code", codeMode); if(codeMode) $("#scanline").style.display="none";
   $("#results").innerHTML=""; lastHitId=null; prevTopId=null; noNumTicks=0; lastNameWord=null;
   scanning=true; lastActivity=Date.now(); hitThumb=null;
   hint("Preparazione scanner… (solo la prima volta può volerci qualche secondo)");
-  try{ await Promise.all([getWorker(), getNumWorker()]); }
+  try{ await (codeMode ? Promise.all([getCodeWorker(), loadAbbr(), getSets("ja")]) : Promise.all([getWorker(), getNumWorker(), loadAbbr()])); }
   catch(e){ hint("Errore nel caricare lo scanner. Controlla la connessione."); return; }
-  hint("Inquadra la carta dentro la cornice");
-  scanTick();
-};
+  hint(codeMode ? "Metti nel riquadro il codice in basso a sinistra (es. SV2a 201/165)" : "Inquadra la carta dentro la cornice");
+  codeMode ? codeTick() : scanTick();
+}
 $("#btnSnap").onclick = ()=>stopCam();
 
 // Zoom: lets you hold the phone far enough to be in focus while the card still fills the frame
@@ -768,6 +780,10 @@ async function quickVisual(card, vis){
       const r=await w.recognize(prep(card,0,Math.round(H*0.5),W,Math.round(H*0.42),Math.min(1.2,1200/W)));
       detected=detectLang(r.data.text);
     }catch(e){}
+    // same picture in both languages: the printed code decides (SV2a = Japanese, "EN" = English)
+    if(list.slice(1).some(c=>fam(c)!==fam(t0) && c._ver!=null && t0._ver-c._ver<0.25)){
+      try{ const ch=codeLangHint(await readNumber(card), await getSets("ja")); if(ch) detected=ch; }catch(e){}
+    }
     if(detected){ const f=detected==="ja"?"ja":"eu"; pool=list.filter(c=>fam(c)===f); if(f==="eu") pool.forEach(c=>c.lang=detected); }
     // language not readable and the same art exists in both languages → full analysis
     // (unless the picture clearly prefers one: the text box differs between English and Japanese prints)
@@ -775,6 +791,8 @@ async function quickVisual(card, vis){
   }
   const t=pool[0], s2=pool[1];
   if(!t || t._ver==null || t._ver<0.75 || t._ver<t0._ver-0.08) return null;
+  // the language says one thing and the picture clearly another → full analysis (reads the code too)
+  if(t!==t0 && (t._ver<t0._ver-0.03 || (t0._vis!=null && t._vis!=null && t0._vis*1.6<t._vis))) return null;
   if(s2 && s2._ver!=null && t._ver-s2._ver<0.12) return null;               // identical art (reprint): read the number too
   list.sort((a,b)=>(b===t)-(a===t));
   lastDiag={card, cands:list.slice(0,4), seen:"(non necessario)", nameText:"(non necessario)", lang:t.lang, detected};
@@ -843,7 +861,8 @@ async function analyzeCard(card){
   // the card name is the biggest text at the top ("Evolves from …" is small): rank words by height
   const nameWords=(top.words||[]).filter(w=>w.confidence>15).sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0)).map(w=>w.text).join(" ");
   const langRes = await langPromise;
-  const detected = langRes ? detectLang(langRes.data.text+"\n"+nameText) : null;
+  let detected = langRes ? detectLang(langRes.data.text+"\n"+nameText) : null;
+  if(state.settings.cardLang==="auto"){ try{ const ch=codeLangHint(numText, await getSets("ja")); if(ch) detected=ch; }catch(e){} }
   const lang = state.settings.cardLang!=="auto" ? state.settings.cardLang : (detected || lastLang || "en");
   if(detected) lastLang=detected;
   const strict=parseNumbers(numText), loose=strict.length?[]:parseNumbersLoose(numText);
@@ -970,6 +989,159 @@ window.scanOnce = async canvas => {
   return r.best ? {id:r.best.id, name:r.best.name, lang:r.best.lang||r.lang, sure:r.sure, how:r.how} : null;
 };
 
+function prepAdapt(src, inv, scale){
+  const W=Math.round(src.width*scale), H=Math.round(src.height*scale);
+  const c=document.createElement("canvas"); c.width=W; c.height=H;
+  const x=c.getContext("2d",{willReadFrequently:true}); x.imageSmoothingQuality="high"; x.drawImage(src,0,0,W,H);
+  const d=x.getImageData(0,0,W,H), p=d.data, g=new Float32Array(W*H), I=new Float64Array((W+1)*(H+1));
+  for(let i=0;i<W*H;i++) g[i]=0.299*p[i*4]+0.587*p[i*4+1]+0.114*p[i*4+2];
+  for(let yy=0;yy<H;yy++){ let row=0; for(let xx=0;xx<W;xx++){ row+=g[yy*W+xx]; I[(yy+1)*(W+1)+xx+1]=I[yy*(W+1)+xx+1]+row; } }
+  const r=Math.max(6, Math.round(H/7));
+  for(let yy=0;yy<H;yy++) for(let xx=0;xx<W;xx++){
+    const x0=Math.max(0,xx-r), x1=Math.min(W,xx+r+1), y0=Math.max(0,yy-r), y1=Math.min(H,yy+r+1);
+    const m=(I[y1*(W+1)+x1]-I[y0*(W+1)+x1]-I[y1*(W+1)+x0]+I[y0*(W+1)+x0])/((x1-x0)*(y1-y0));
+    const v=g[yy*W+xx], on = inv ? v>m+18 : v<m-18;     // text pixel?
+    const o=(yy*W+xx)*4; p[o]=p[o+1]=p[o+2]=on?0:255;
+  }
+  x.putImageData(d,0,0); return c;
+}
+/* ---------- CODE READER: set code + number printed at the bottom (SV2a 201/165, SVI EN 198/198) ---------- */
+let codeWorker=null, lastCode=null, abbrP=null;
+async function getCodeWorker(){
+  if(codeWorker) return codeWorker;
+  const w=await Tesseract.createWorker("eng",1);
+  await w.setParameters({tessedit_char_whitelist:"0123456789/-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ", tessedit_pageseg_mode:"6"});
+  codeWorker=w; return w;
+}
+let abbrCache=null;
+const loadAbbr = ()=> abbrP || (abbrP = cachedJSON("data/abbr-en.json?v=1",30).then(a=>abbrCache=a).catch(()=>{ abbrP=null; return {}; }));
+const EU_MARK = {EN:"en",IT:"it",FR:"fr",DE:"de",ES:"es",PT:"pt"};
+function codeTokens(text){
+  const out=[];
+  for(const t of (text||"").split(/[^A-Za-z0-9]+/)){ if(t.length<2 || t.length>9) continue; out.push(t);
+    const m=t.match(/^([A-Z0-9]{2,4})(EN|IT|FR|DE|ES|PT)$/); if(m) out.push(m[1]); }   // "SVIEN" = set SVI + language EN
+  return out;
+}
+function gluedMark(text, abbr){
+  for(const t of (text||"").split(/[^A-Za-z0-9]+/)){ const m=t.match(/^([A-Z0-9]{2,4})(EN|IT|FR|DE|ES|PT)$/); if(m && (!abbr || abbr[m[1]])) return EU_MARK[m[2]]; }
+  return null;
+}
+// OCR confusions in small printed set codes
+function tokVariants(t){
+  const out=new Set([t]);
+  out.add(t.replace(/[oeqc]$/,"a")); out.add(t.replace(/[Iil|]/g,"1")); out.add(t.replace(/^5/,"S")); out.add(t.replace(/^5/,"S").replace(/[Iil|]/g,"1")); out.add(t.replace(/(?<=\d)O/g,"0")); out.add(t.replace(/Z/g,"2")); out.add(t.replace(/B$/,"8"));
+  return [...out];
+}
+function findJaSet(tokens, setsJa){
+  const byId={}; setsJa.forEach(x=>byId[x.id.toLowerCase()]=x);
+  for(const t of tokens){ if(!/\d/.test(t)||!/[A-Za-z]/.test(t)||t.length<3) continue; for(const v of tokVariants(t)){ const x=byId[v.toLowerCase()]; if(x) return x; } }
+  return null;
+}
+// Language from the code line: "EN"/"IT"... = European print; a Japanese set code (SV2a, S8b...) = Japanese print
+function codeLangHint(text, setsJa){
+  const toks=codeTokens(text);
+  const m=(text||"").match(/(?:^|[^A-Za-z])(EN|IT|FR|DE|ES|PT) ?[A-Z]{0,2}\d{1,3} ?\/ ?[A-Z]{0,2}\d{2,3}/);
+  if(m) return EU_MARK[m[1]];
+  const g=gluedMark(text, abbrCache); if(g) return g;
+  return setsJa && findJaSet(toks, setsJa) ? "ja" : null;
+}
+async function codeLookup(text){
+  const [setsJa, abbr] = await Promise.all([getSets("ja").catch(()=>[]), loadAbbr()]);
+  const t=(text||"").replace(/[|\\]/g,"/");
+  // every plausible reading of the number ("081/198", and "0817198" with the slash read as 7)
+  const allNums=(x)=>{ const seen=new Set(), out=[]; for(const n of parseNumbers(x).concat(parseNumbersLoose(x))){ const k=n.prefix+n.n+"/"+n.tot; if(!seen.has(k)){ seen.add(k); out.push(n); } } return out; };
+  const nums=allNums(t);
+  if(!nums.length) return null;
+  const toks=codeTokens(t);
+  const euM=t.match(/(?:^|[^A-Za-z])(EN|IT|FR|DE|ES|PT) ?[A-Z]{0,2}\d{1,3} ?\/ ?[A-Z]{0,2}\d{2,3}/), eu=euM?EU_MARK[euM[1]]:gluedMark(t, abbr);   // language mark right before the number
+  const mode=state.settings.cardLang;
+  const euLang = eu || (mode!=="auto" && mode!=="ja" ? mode : "en");
+  const pick=(st, lang, ns)=>{ if(!st||!st.cards) return null; const tot=st.cardCount&&st.cardCount.official;
+    for(const num of ns){ if(num.tot!==tot) continue; const c=st.cards.find(c=>numOf(c.localId)===num.n && (!num.prefix || String(c.localId).toUpperCase().startsWith(num.prefix)));
+      if(c) return {id:c.id,name:c.name,localId:c.localId,image:c.image,setId:st.id,setName:st.name,printed:tot,lang,_exact:true}; }
+    return null; };
+  // 1+2) set code and number on the SAME printed line, and the total matches the set → that exact card
+  for(const L of t.split(/\n/)){
+    const nL=allNums(L); if(!nL.length) continue;
+    const tL=codeTokens(L);
+    const js = !eu && mode!=="en" ? findJaSet(tL, setsJa) : null;   // Japanese set code (SV2a, S8b…)
+    if(js){ const c=pick(await getSet(js.id,"ja").catch(()=>null), "ja", nL); if(c){ if(!c.image){ await loadExtra("ja").catch(()=>{}); if(extraMap[c.id]) c.imgFull=extraMap[c.id].image; } return {cards:[c], exact:true, how:"codice "+js.id}; } }
+    if(mode!=="ja") for(const tk of tL){ const ids=abbr[tk]; if(!ids || tk.length<3 || tk!==tk.toUpperCase()) continue;   // English abbreviation (SVI, PAF…)
+      for(const sid of ids){ const c=pick(await getSet(sid,"en").catch(()=>null), euLang, nL); if(c) return {cards:[c], exact:true, how:"codice "+tk}; } }
+  }
+  // 3) number only: every printing with that number/total, Japanese and European
+  const fams = eu ? ["eu"] : mode==="ja" ? ["ja"] : mode==="auto" ? ["ja","eu"] : ["eu"];
+  let cards=[];
+  const got=new Set();
+  nums.slice(0,5).forEach((n,i)=>n._i=i);
+  for(const num of nums.slice(0,5)) for(const f of fams)
+    (await identifyIn("", "", true, [num], f==="ja"?"ja":euLang).catch(()=>[])).forEach(c=>{ if(!got.has(c.id)){ got.add(c.id); c._ni=num._i; cards.push(c); } });
+  if(!cards.length) return null;
+  // several printings share the number: pick the one whose set code is (almost) what was read next to it
+  if(cards.length>1){
+    const rev={}; for(const k in abbr) abbr[k].forEach(id=>rev[id]=k);
+    const canon=x=>x.toLowerCase().replace(/[0oqaec]/g,"o").replace(/[1li|]/g,"i").replace(/[5s]/g,"s").replace(/[2z]/g,"z").replace(/[8b]/g,"b");
+    const ctoks=toks.map(canon), utoks=toks.filter(x=>x===x.toUpperCase()).map(canon);
+    const lev=(a,b)=>{ const d=[...Array(b.length+1).keys()]; for(let i=1;i<=a.length;i++){ let pr=d[0]; d[0]=i; for(let j=1;j<=b.length;j++){ const t=d[j]; d[j]=Math.min(d[j]+1,d[j-1]+1,pr+(a[i-1]===b[j-1]?0:1)); pr=t; } } return d[b.length]; };
+    cards.forEach(c=>{ const code=c.lang==="ja"?c.setId:rev[c.setId]; c._cd=9;
+      if(code && code.length>=3){ const cc=canon(code); for(const t of (c.lang==="ja"?ctoks:utoks)){ const dd = t===cc ? 0 : (cc.length>=3 && Math.abs(t.length-cc.length)<=1 ? lev(t,cc) : 9); if(dd<c._cd) c._cd=dd; } } });
+    const best=Math.min(...cards.map(c=>c._cd));
+    if(best<=1){ let hit=cards.filter(c=>c._cd===best); const mi=Math.min(...hit.map(c=>c._ni)); if(hit.length>1) hit=hit.filter(c=>c._ni===mi); if(hit.length===1) return {cards:hit, exact:false, how:"codice "+(hit[0].lang==="ja"?hit[0].setId:rev[hit[0].setId])}; cards=hit.concat(cards.filter(c=>c._cd!==best)); }
+  }
+  // no set code recognised: the most likely reading of the number first
+  if(!cards.some(c=>c._cd!=null && c._cd<=1)){ const mi=Math.min(...cards.map(c=>c._ni)); cards=cards.filter(c=>c._ni===mi).concat(cards.filter(c=>c._ni!==mi)); const first=cards.filter(c=>c._ni===mi); if(first.length===1 && !nums[mi].loose) cards=first; }
+  if(cards.some(c=>!c.image)){ await loadExtra("ja").catch(()=>{}); cards.forEach(c=>{ if(!c.image && extraMap[c.id]) c.imgFull=extraMap[c.id].image; }); }
+  return {cards:cards.slice(0,12), exact:false, how:"numero "+nums[0].n+"/"+nums[0].tot};
+}
+async function readCode(strip){
+  const w=await getCodeWorker(), sc=Math.min(2.5, Math.max(1, 1600/strip.width)), texts=[];
+  let r=null;
+  for(const mk of [()=>prepAdapt(strip,false,sc), ()=>prepAdapt(strip,true,sc), ()=>prepBin(strip,0,0,strip.width,strip.height)]){
+    texts.push((await w.recognize(mk())).data.text);
+    r = await codeLookup(texts.join("\n")) || r;
+    if(r && r.exact) break;
+  }
+  return {r, text:texts.join(" | ").replace(/\s+/g," ")};
+}
+let lastPickKey=null;
+async function codeTick(){
+  if(!scanning) return;
+  const v=$("#video");
+  if(busy || !v.videoWidth || $("#sheet").classList.contains("open") || document.hidden){ setTimeout(codeTick,400); return; }
+  busy=true;
+  try{
+    const rc=await readCode(grabCard()), r=rc.r, seen=rc.text.slice(0,40);
+    if(!scanning) return;
+    const best = r && r.cards.length===1 ? r.cards[0] : null, nn=parseNumbers(rc.text)[0];
+    if(document.activeElement!==$("#qNum") && document.activeElement!==$("#qName")){
+      if(best){ $("#qNum").value=`${best.localId}/${best.printed||""}`; $("#qName").value=best.lang==="ja"?best.setId:""; }
+      else if(nn){ $("#qNum").value=`${nn.n}/${nn.tot}`; }
+    }
+    if(r && r.cards.length){
+      lastActivity=Date.now();
+      const key=r.cards.map(c=>c.id).join(","), t=r.cards[0];
+      const stable = r.exact || key===lastCode;
+      if(stable && r.cards.length===1 && t.id!==lastHitId){ liveHit(t, []); hint("Trovata con il "+r.how+": inquadra il prossimo codice"); }
+      else if(stable && r.cards.length>1 && key!==lastPickKey){ lastPickKey=key; lastHitId=null; $("#liveRes").style.display="none";
+        hint("Il numero è in più carte: avvicina anche il codice dell'espansione, o scegli qui sotto", seen);
+        showPicker("Quale di queste è la tua?", "Stesso numero in espansioni o lingue diverse (🇯🇵 = prezzo giapponese).", r.cards.map(c=>Object.assign({}, c, {name:(c.lang==="ja"?"🇯🇵 ":"")+c.name})));
+      }
+      else if(!stable) hint("Quasi… tieni fermo il codice", seen);
+      lastCode=key;
+    }else{ lastCode=null; if(!lastHitId) hint("Metti nel riquadro il codice in basso a sinistra (es. SV2a 201/165)", seen); }
+  }catch(e){ console.error(e); }
+  finally{
+    busy=false;
+    if(scanning && codeMode){
+      if(Date.now()-lastActivity > 45000){ stopCam(); toast("Lettore codice in pausa per non scaldare il telefono"); }
+      else setTimeout(codeTick, 450);
+    }
+  }
+}
+// test hook: read a code from an image of the code strip
+window.readCodeImage = async canvas => { const {r,text}=await readCode(canvas);
+  return {text, r: r && {exact:r.exact, how:r.how, ids:r.cards.map(c=>c.id+"("+c.lang+")")}}; };
+
 let lastActivity=Date.now(), hitThumb=null;
 function frameThumb(){
   const v=$("#video"); const c=document.createElement("canvas"); c.width=24; c.height=32;
@@ -1072,7 +1244,7 @@ function stopCam(){
   if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
   ["#video","#frame","#camHint","#scanline","#liveRes"].forEach(s=>$(s).style.display="none");
   if($("#shot").style.display!=="block") $("#camEmpty").style.display="";
-  $("#btnCam").style.display=""; $("#btnSnap").style.display="none"; $("#btnZoom").style.display="none";
+  $("#btnCam").style.display=""; $("#btnCode").style.display=""; $("#btnSnap").style.display="none"; $("#btnZoom").style.display="none";
 }
 function showShot(src){ const i=$("#shot"); i.src=src; i.style.display="block"; i.style.objectFit="contain"; $("#camEmpty").style.display="none"; }
 $("#file").onchange = $("#fileCam").onchange = e=>{
@@ -1212,7 +1384,7 @@ async function identifyIn(text, fullText, numberOnly, numsIn, lang){
   for(const num of nums.slice(0,6)){
     // secret rares can exceed the official count; match sets on printed total
     const matchSets = sets.filter(s=>s.cardCount && s.cardCount.official===num.tot);
-    const lists = await Promise.all(matchSets.slice(0,12).map(s=>getSet(s.id, db).catch(()=>null)));
+    const lists = await Promise.all(matchSets.slice(-16).map(s=>getSet(s.id, db).catch(()=>null)));   // newest sets first
     lists.forEach(set=>{
       if(!set||!set.cards) return;
       set.cards.forEach(c=>{
@@ -1283,13 +1455,14 @@ async function manualSearch(){
   if(!name && !num) return toast("Scrivi un nome o un numero");
   $("#results").innerHTML=`<div class="card"><span class="spin"></span> Ricerca…</div>`;
   try{
-    const [setsEn, setsJa, J] = await Promise.all([getSets("en").catch(()=>[]), getSets("ja").catch(()=>[]), loadJaNames().catch(()=>null)]);
+    const [setsEn, setsJa, J, AB] = await Promise.all([getSets("en").catch(()=>[]), getSets("ja").catch(()=>[]), loadJaNames().catch(()=>null), loadAbbr()]);
     // a set code may be typed anywhere: "SV2a 201/165", "s8b 280", "sv03.5 25"
     let setHit=null;
     const toks=(name+" "+num).split(/[\s,;]+/).filter(Boolean);
     for(const t of toks){
       const k=t.toLowerCase();
-      const ja=setsJa.find(x=>x.id.toLowerCase()===k), en=setsEn.find(x=>x.id.toLowerCase()===k);
+      const ab=(AB||{})[t.toUpperCase().replace(/(EN|IT|FR|DE|ES|PT)$/,"")]||(AB||{})[t.toUpperCase()];   // SVI, PAF, OBF… (also "SVIEN")
+      const ja=setsJa.find(x=>x.id.toLowerCase()===k), en=setsEn.find(x=>x.id.toLowerCase()===k) || (ab && setsEn.find(x=>x.id===ab[ab.length-1]));
       if(ja||en){ setHit={ja, en, tok:t}; break; }
     }
     if(setHit){ name=name.split(/\s+/).filter(t=>t!==setHit.tok).join(" "); num=num.split(/\s+/).filter(t=>t!==setHit.tok).join(" "); }
